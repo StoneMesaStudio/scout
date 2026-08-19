@@ -9,6 +9,8 @@ public enum NameMatch: Int, Sendable, Comparable {
     case substring = 300
     /// "serv" starting a word in "Ford Service Receipts".
     case wordPrefix = 520
+    /// The query is a whole word of the name: "service" in "Ford Service Receipts".
+    case wordExact = 620
     /// The name starts with the query.
     case prefix = 700
     /// The name is the query.
@@ -26,12 +28,12 @@ public enum NameMatch: Int, Sendable, Comparable {
         if (name as NSString).deletingPathExtension == query { return .exact }
         if name.hasPrefix(query) { return .prefix }
 
-        // Word prefix: the query starts any word in the name. This is the one that puts
-        // "Ford F350 Service Receipts" above "webservices.log" for the query "service".
-        let separators = CharacterSet(charactersIn: " -_.·/()[]")
-        for word in name.components(separatedBy: separators) where word.hasPrefix(query) {
-            return .wordPrefix
-        }
+        // Whole word, then word prefix. This is what puts "Ford F350 Service Receipts" above
+        // "webservices.log" for the query "service", and "Warranty.pdf" above "Warrantied".
+        let separators = CharacterSet(charactersIn: " -_.·/()[]'\u{2019}")
+        let words = name.components(separatedBy: separators)
+        if words.contains(query) { return .wordExact }
+        if words.contains(where: { $0.hasPrefix(query) }) { return .wordPrefix }
 
         if name.contains(query) { return .substring }
         return .contentOnly
@@ -50,7 +52,10 @@ public struct Ranker: Sendable {
         /// An app matched by name is almost always what was wanted.
         public var applicationBonus: Double = 120
         /// Maximum boost for something touched just now, decaying over `recencyHalfLifeDays`.
-        public var recencyBonus: Double = 220
+        ///
+        /// Deliberately smaller than the gap between two match qualities, so that being recent
+        /// can reorder equally-good matches but never promote a worse one above a better one.
+        public var recencyBonus: Double = 170
         public var recencyHalfLifeDays: Double = 120
         /// Applied when the Mac recorded the user actually opening the item.
         public var openedBeforeBonus: Double = 90
@@ -67,6 +72,38 @@ public struct Ranker: Sendable {
     public init(weights: Weights = Weights(), home: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.weights = weights
         self.home = home
+    }
+
+    /// A `yyyy-mm-dd` at the very start of a filename, as a sortable string. Nil for anything
+    /// else — a bare year or a date in the middle is too weak a signal to reorder on.
+    static func leadingDate(in name: String) -> String? {
+        let characters = Array(name)
+        guard characters.count >= 10 else { return nil }
+        let candidate = String(characters[0..<10])
+
+        let digits = [0, 1, 2, 3, 5, 6, 8, 9]
+        let dashes = [4, 7]
+        let parts = Array(candidate)
+        guard digits.allSatisfy({ parts[$0].isNumber }), dashes.allSatisfy({ parts[$0] == "-" })
+        else { return nil }
+
+        return candidate
+    }
+
+    /// Turn a `yyyy-mm-dd` string into a date, in UTC so the result never shifts with the
+    /// machine's time zone.
+    static func date(fromISO text: String) -> Date? {
+        let parts = text.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+
+        var components = DateComponents()
+        components.year = parts[0]
+        components.month = parts[1]
+        components.day = parts[2]
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        return calendar.date(from: components)
     }
 
     /// A multiplier on the whole score, by where the item lives. Deliberately a multiplier and
@@ -101,8 +138,12 @@ public struct Ranker: Sendable {
         case .file: break
         }
 
-        // Recency uses whichever is newer: when it changed, or when it was last opened.
-        let touched = [result.modified, result.lastUsed].compactMap(\.self).max()
+        // Recency uses whichever is newer: when it changed, or when it was last opened — except
+        // that a date written into the filename replaces the filesystem's. People name receipts
+        // and scans by their real date; a copy or a re-save overwrites the filesystem's version
+        // of that date with the day the file was moved, which means nothing.
+        let stamped = Self.leadingDate(in: result.displayName).flatMap(Self.date(fromISO:))
+        let touched = [stamped ?? result.modified, result.lastUsed].compactMap(\.self).max()
         if let touched {
             let days = max(0, now.timeIntervalSince(touched) / 86_400)
             score += weights.recencyBonus * pow(0.5, days / weights.recencyHalfLifeDays)
@@ -165,9 +206,23 @@ public struct Ranker: Sendable {
             scored.append((result: item, score: value))
         }
 
-        // Ties break on name so the order never jitters between identical searches.
+        // Ties break on what was touched most recently, then on name so the order never jitters
+        // between identical searches. Without the recency step, folders full of date-prefixed
+        // files come back oldest-first, which is exactly backwards.
         scored.sort { a, b in
-            a.score == b.score ? a.result.displayName < b.result.displayName : a.score > b.score
+            if a.score != b.score { return a.score > b.score }
+            let aTouched = [a.result.modified, a.result.lastUsed].compactMap(\.self).max()
+            let bTouched = [b.result.modified, b.result.lastUsed].compactMap(\.self).max()
+            // A date the person typed into the filename beats the one the filesystem recorded.
+            // In an archive of receipts every file was copied in at once, so the modification
+            // dates are an artefact of the copy while the filename dates are the real ones.
+            if let aDated = Self.leadingDate(in: a.result.displayName),
+               let bDated = Self.leadingDate(in: b.result.displayName) {
+                if aDated != bDated { return aDated > bDated }
+            } else if aTouched != bTouched {
+                return (aTouched ?? .distantPast) > (bTouched ?? .distantPast)
+            }
+            return a.result.displayName < b.result.displayName
         }
         let ordered = scored.map(\.result)
         guard !learnedPicks.isEmpty else { return ordered }

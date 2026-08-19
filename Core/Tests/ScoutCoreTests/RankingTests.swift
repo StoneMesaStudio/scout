@@ -36,10 +36,20 @@ private func result(
 
     @Test func aWordInsideTheNameOutranksALooseSubstring() {
         // The distinction that puts real records above library noise.
-        #expect(NameMatch.classify(name: "Ford F350 Service Receipts", query: "service") == .wordPrefix)
+        #expect(NameMatch.classify(name: "Ford F350 Service Receipts", query: "service") == .wordExact)
         #expect(NameMatch.classify(name: "webservices.log", query: "service") == .substring)
         #expect(NameMatch.classify(name: "Ford F350 Service Receipts", query: "service")
                 > NameMatch.classify(name: "webservices.log", query: "service"))
+    }
+
+    @Test func awholeWordBeatsAWordThatMerelyStartsWithIt() {
+        #expect(NameMatch.classify(name: "2023 Warranty.pdf", query: "warranty")
+                > NameMatch.classify(name: "Warranties and receipts", query: "warranty"))
+    }
+
+    @Test func anApostropheDoesNotHideAWord() {
+        // "Traveler's Insurance CAT.pdf" must match "insurance" as a whole word.
+        #expect(NameMatch.classify(name: "Traveler's Insurance CAT.pdf", query: "insurance") == .wordExact)
     }
 
     @Test func aNameThatDoesNotContainTheQueryIsAContentMatch() {
@@ -129,6 +139,26 @@ private func result(
         #expect(ranker.rank([a, b], query: "notes", now: now).count == 2)
     }
 
+    @Test func equallyGoodMatchesComeBackNewestFirst() {
+        // Folders of date-prefixed receipts used to come back oldest-first, because ties were
+        // broken on the filename and the filename starts with the date.
+        let items = [
+            result("/Users/tester/Documents/2010-08-15 Budget Water.pdf", modified: daysAgo(4_000)),
+            result("/Users/tester/Documents/2024-07-12 Budget Water.pdf", modified: daysAgo(400)),
+        ]
+        #expect(ranker.rank(items, query: "budget", now: now).first?.displayName
+                == "2024-07-12 Budget Water.pdf")
+    }
+
+    @Test func beingRecentCannotPromoteAWorseMatch() {
+        // Recency reorders equally good matches; it must never lift a substring match above a
+        // whole-word one.
+        let better = result("/Users/tester/Documents/Service Records.pdf", modified: daysAgo(3_000))
+        let worse = result("/Users/tester/Documents/webservices.log", modified: daysAgo(0))
+        #expect(ranker.score(better, query: "service", now: now)
+                > ranker.score(worse, query: "service", now: now))
+    }
+
     @Test func orderIsStableAcrossIdenticalSearches() {
         let items = [
             result("/Users/tester/Documents/service a.txt", modified: daysAgo(5)),
@@ -136,5 +166,54 @@ private func result(
         ]
         #expect(ranker.rank(items, query: "service", now: now).map(\.displayName)
                 == ranker.rank(items.reversed(), query: "service", now: now).map(\.displayName))
+    }
+}
+
+@Suite struct FilenameDateTests {
+
+    @Test func aLeadingIsoDateIsRecognised() {
+        #expect(Ranker.leadingDate(in: "2024-07-12 NK Home - Invoice.pdf") == "2024-07-12")
+    }
+
+    @Test func anythingElseIsNotADate() {
+        #expect(Ranker.leadingDate(in: "2024 receipts.pdf") == nil)
+        #expect(Ranker.leadingDate(in: "Invoice 2024-07-12.pdf") == nil)
+        #expect(Ranker.leadingDate(in: "short.pdf") == nil)
+    }
+
+    @Test func batchCopiedReceiptsComeBackNewestFirst() {
+        // A folder of receipts imported in one go carries copy dates, not real ones, so the date
+        // in the filename is what the order should follow.
+        let shared = Date(timeIntervalSince1970: 1_700_000_000)
+        let ranker = Ranker(home: URL(filePath: "/Users/tester"))
+        let items = ["2012-04-17 AJ Madison - Invoice.pdf", "2024-07-12 NK Home - Invoice.pdf"]
+            .map {
+                SearchResult(
+                    url: URL(filePath: "/Users/tester/Documents/Receipts/\($0)"),
+                    displayName: $0,
+                    kind: .file,
+                    modified: shared
+                )
+            }
+
+        #expect(ranker.rank(items, query: "invoice").first?.displayName.hasPrefix("2024") == true)
+    }
+
+    @Test func theFilenameDateWinsOverAMisleadingModificationDate() {
+        // Re-saving a 2012 receipt must not float it above a 2024 one.
+        let ranker = Ranker(home: URL(filePath: "/Users/tester"))
+        let old = SearchResult(
+            url: URL(filePath: "/Users/tester/Documents/Receipts/2012-04-17 AJ Madison - Invoice.pdf"),
+            displayName: "2012-04-17 AJ Madison - Invoice.pdf",
+            kind: .file,
+            modified: Date(timeIntervalSince1970: 1_750_000_000)
+        )
+        let recent = SearchResult(
+            url: URL(filePath: "/Users/tester/Documents/Receipts/2024-07-12 NK Home - Invoice.pdf"),
+            displayName: "2024-07-12 NK Home - Invoice.pdf",
+            kind: .file,
+            modified: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        #expect(ranker.rank([old, recent], query: "invoice").first?.displayName.hasPrefix("2024") == true)
     }
 }
