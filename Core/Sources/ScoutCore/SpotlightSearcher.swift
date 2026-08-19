@@ -79,7 +79,7 @@ public final class SpotlightSearcher {
     /// `LIKE[cd]` is case- and diacritic-insensitive; the `*` wildcards make it a contains match.
     /// Any `*` or `?` the user typed is escaped so it searches for the character rather than
     /// acting as a wildcard.
-    public static func predicate(for text: String) -> NSPredicate {
+    public nonisolated static func predicate(for text: String) -> NSPredicate {
         let escaped = text
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "*", with: "\\*")

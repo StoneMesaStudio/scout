@@ -9,6 +9,12 @@ struct PanelRowView: View {
     let row: PanelRow
     let selected: Bool
 
+    /// A message is truncated at the end like a sentence, not in the middle like a filename.
+    private var isMessage: Bool {
+        if case .message = row { return true }
+        return false
+    }
+
     var body: some View {
         HStack(spacing: 12) {
             icon
@@ -19,7 +25,7 @@ struct PanelRowView: View {
                     Text(title)
                         .font(.system(size: 14, weight: .medium))
                         .lineLimit(1)
-                        .truncationMode(.middle)
+                        .truncationMode(isMessage ? .tail : .middle)
 
                     if let badge {
                         Text(badge)
@@ -57,12 +63,20 @@ struct PanelRowView: View {
         case .file(let result):
             Image(nsImage: NSWorkspace.shared.icon(forFile: result.url.path)).resizable()
         case .pane:
-            Image(systemName: "gearshape")
-                .font(.system(size: 17))
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+            symbolIcon("gearshape")
+        case .mail:
+            symbolIcon("envelope.fill")
+        case .message:
+            symbolIcon("message.fill")
         }
+    }
+
+    private func symbolIcon(_ name: String) -> some View {
+        Image(systemName: name)
+            .font(.system(size: 15))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
     }
 
     private var title: String {
@@ -70,6 +84,9 @@ struct PanelRowView: View {
         case .app(let entry, _): entry.name
         case .file(let result): result.displayName
         case .pane(let pane): pane.name
+        case .mail(let hit): hit.subject
+        // A message has no title of its own, so the message *is* the title.
+        case .message(let hit): hit.text
         }
     }
 
@@ -77,6 +94,8 @@ struct PanelRowView: View {
         switch row {
         case .file(let result) where result.duplicateCount > 1:
             "\(result.duplicateCount) copies"
+        case .mail(let hit) where hit.hasAttachment:
+            "attachment"
         default:
             nil
         }
@@ -100,6 +119,18 @@ struct PanelRowView: View {
 
         case .pane:
             return "System Settings"
+
+        case .mail(let hit):
+            var parts = hit.correspondents.prefix(2).map { $0 }
+            if let date = hit.date {
+                parts.append(date.formatted(date: .abbreviated, time: .omitted))
+            }
+            if let mailbox = hit.mailbox { parts.append(mailbox) }
+            return parts.joined(separator: " · ")
+
+        case .message(let hit):
+            let who = hit.isFromMe ? "You → \(hit.counterpart)" : hit.counterpart
+            return "\(who) · \(hit.date.formatted(date: .abbreviated, time: .shortened))"
         }
     }
 
@@ -108,6 +139,8 @@ struct PanelRowView: View {
         case .app: "return to launch"
         case .file(let result): result.kind == .folder ? "tab to search inside" : nil
         case .pane: "return to open"
+        case .mail: "return to open in Mail"
+        case .message: "return to open the conversation"
         }
     }
 }

@@ -18,8 +18,14 @@ struct SearchRootView: View {
                 Divider().opacity(0.5)
             }
 
-            if model.rowCount > 0 || model.hiddenCount > 0 {
+            if model.status != .ready {
+                LaneStatusView(status: model.status, lane: model.lane)
+                Divider().opacity(0.5)
+            } else if model.rowCount > 0 || model.hiddenCount > 0 {
                 results
+                Divider().opacity(0.5)
+            } else if !model.text.isEmpty {
+                emptyState
                 Divider().opacity(0.5)
             }
 
@@ -201,6 +207,34 @@ struct SearchRootView: View {
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .padding(.top, 4)
+    }
+
+    /// "Nothing matched" has to be distinguishable from "still searching" and from "not
+    /// allowed to look" — the same blank list otherwise stands for all three.
+    private var emptyState: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "magnifyingglass")
+            Text("Nothing in \(scopeDescription) matches “\(model.text)”.")
+            Spacer()
+            if model.lane == .files, model.scope == .myFiles {
+                Button("Search the whole Mac") { model.toggleScope() }
+                    .buttonStyle(.link)
+            }
+        }
+        .font(.system(size: 12.5))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 18)
+    }
+
+    private var scopeDescription: String {
+        switch model.lane {
+        case .files: model.focusedFolderName ?? model.scope.title
+        case .mail: "your mail"
+        case .messages: "your messages"
+        case .apps: "your apps"
+        case .system: "System Settings"
+        }
     }
 
     // MARK: - Footer

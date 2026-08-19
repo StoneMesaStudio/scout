@@ -9,14 +9,27 @@ enum PanelRow: Identifiable {
     case app(AppIndex.Entry, pinned: Bool)
     case file(SearchResult)
     case pane(SettingsPaneIndex.Pane)
+    case mail(MailHit)
+    case message(MessageHit)
 
     var id: String {
         switch self {
         case .app(let entry, let pinned): "app:\(pinned):\(entry.url.path)"
         case .file(let result): "file:\(result.url.path)"
         case .pane(let pane): "pane:\(pane.identifier)"
+        case .mail(let hit): "mail:\(hit.url.path)"
+        case .message(let hit): "message:\(hit.rowID)"
         }
     }
+}
+
+/// Why a lane has nothing to show. An empty list and a missing permission look identical
+/// otherwise, and the second one is fixable.
+enum LaneStatus: Equatable {
+    case ready
+    case needsFullDiskAccess
+    case building
+    case failed(String)
 }
 
 /// Everything the panel shows and does.
@@ -64,6 +77,7 @@ final class SearchModel {
     var focusedFolderName: String? { focusedFolder?.lastPathComponent }
 
     private(set) var rows: [PanelRow] = []
+    private(set) var status: LaneStatus = .ready
     /// How many matches the exclusions removed, so nothing disappears without a trace.
     private(set) var hiddenCount: Int = 0
 
@@ -81,6 +95,8 @@ final class SearchModel {
     // MARK: - Machinery
 
     private let searcher = SpotlightSearcher()
+    private let mailSearcher = MailSearcher()
+    private let messages = MessageSearchService()
     private let ranker = Ranker()
     private let appIndex = AppIndex.scan()
     private let paneIndex = SettingsPaneIndex.scan()
@@ -90,11 +106,19 @@ final class SearchModel {
     private var debounce: Task<Void, Never>?
     private let resultLimit = 60
 
+    private var messageTask: Task<Void, Never>?
+
     init() {
         searcher.onResults = { [weak self] results in
             guard let self else { return }
             self.rawResults = results
             self.rebuildRows()
+        }
+        mailSearcher.onResults = { [weak self] hits in
+            guard let self, self.lane == .mail else { return }
+            self.rows = hits.map { .mail($0) }
+            self.status = .ready
+            self.selection = min(self.selection, max(0, self.rows.count - 1))
         }
     }
 
@@ -111,11 +135,14 @@ final class SearchModel {
         rows = []
         hiddenCount = 0
         selection = 0
+        status = .ready
     }
 
     func stop() {
         debounce?.cancel()
+        messageTask?.cancel()
         searcher.stop()
+        mailSearcher.stop()
     }
 
     // MARK: - Searching
@@ -132,19 +159,58 @@ final class SearchModel {
 
     private func runSearch() {
         selection = 0
+        searcher.stop()
+        mailSearcher.stop()
+        messageTask?.cancel()
+
         switch lane {
         case .files:
+            status = .ready
             searcher.search(text, scope: scope, folder: focusedFolder)
+
         case .apps, .system:
             // Both are small in-memory lists, so there is nothing to wait for.
-            searcher.stop()
+            status = .ready
             rawResults = []
             rebuildRows()
-        case .mail, .messages:
-            searcher.stop()
-            rawResults = []
-            rebuildRows()
+
+        case .mail:
+            rows = []
+            status = mailSearcher.isIndexReadable ? .ready : .needsFullDiskAccess
+            if case .ready = status { mailSearcher.search(text) }
+
+        case .messages:
+            rows = []
+            searchMessages()
         }
+    }
+
+    /// The Messages index is built and read off the main thread, so the panel keeps responding
+    /// while a long history is read for the first time.
+    private func searchMessages() {
+        let query = text
+        status = .building
+        messageTask = Task { [messages] in
+            await messages.prepare()
+            let state = await messages.currentState()
+            let hits = query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2
+                ? await messages.search(query)
+                : []
+
+            guard !Task.isCancelled else { return }
+            self.applyMessages(hits, state: state, query: query)
+        }
+    }
+
+    private func applyMessages(_ hits: [MessageHit], state: MessageSearchService.State, query: String) {
+        guard lane == .messages, query == text else { return }
+        switch state {
+        case .needsFullDiskAccess: status = .needsFullDiskAccess
+        case .failed(let reason): status = .failed(reason)
+        case .idle, .building, .ready: status = .ready
+        }
+        rows = hits.map { .message($0) }
+        selection = min(selection, max(0, rows.count - 1))
     }
 
     private func rebuildRows() {
@@ -152,7 +218,7 @@ final class SearchModel {
         case .files: rebuildFileRows()
         case .apps: rows = appIndex.matches(for: text).map { .app($0, pinned: false) }
         case .system: rows = paneIndex.matches(for: text).map { .pane($0) }
-        case .mail, .messages: rows = []
+        case .mail, .messages: break  // filled in by their own asynchronous searches
         }
         selection = min(selection, max(0, rows.count - 1))
     }
@@ -217,6 +283,16 @@ final class SearchModel {
             NSWorkspace.shared.open(result.url)
         case .pane(let pane):
             if let url = pane.url { NSWorkspace.shared.open(url) }
+        case .mail(let hit):
+            NSWorkspace.shared.open(hit.openURL)
+        case .message(let hit):
+            // Without a conversation to open, fall back to launching Messages itself rather
+            // than doing nothing.
+            if let url = hit.openURL {
+                NSWorkspace.shared.open(url)
+            } else if let messages = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.MobileSMS") {
+                NSWorkspace.shared.openApplication(at: messages, configuration: NSWorkspace.OpenConfiguration())
+            }
         case nil:
             return
         }
@@ -228,7 +304,8 @@ final class SearchModel {
         let url: URL? = switch selectedRow {
         case .app(let entry, _): entry.url
         case .file(let result): result.url
-        case .pane, nil: nil
+        case .mail(let hit): hit.url
+        case .pane, .message, nil: nil
         }
         guard let url else { return }
         if let result = selectedFile { pickMemory.record(query: text, url: result.url) }
