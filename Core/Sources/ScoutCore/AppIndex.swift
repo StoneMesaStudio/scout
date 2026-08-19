@@ -1,3 +1,4 @@
+import CoreServices
 import Foundation
 
 /// The installed applications, scanned once and matched by exact name.
@@ -8,13 +9,19 @@ import Foundation
 /// qualify — a partial match would put Mail above every file whose name starts with "mai".
 public struct AppIndex: Sendable {
 
-    public struct Entry: Sendable, Hashable {
+    public struct Entry: Sendable, Hashable, Identifiable {
         public let url: URL
         public let name: String
+        /// When the Mac last recorded this app being launched. Used to order the Apps lane when
+        /// nothing has been typed yet — "what I actually use" beats alphabetical.
+        public let lastUsed: Date?
 
-        public init(url: URL, name: String) {
+        public var id: URL { url }
+
+        public init(url: URL, name: String, lastUsed: Date? = nil) {
             self.url = url
             self.name = name
+            self.lastUsed = lastUsed
         }
     }
 
@@ -48,11 +55,23 @@ public struct AppIndex: Sendable {
             ) else { continue }
 
             for url in contents where url.pathExtension == "app" {
-                entries.append(Entry(url: url, name: url.deletingPathExtension().lastPathComponent))
+                entries.append(Entry(
+                    url: url,
+                    name: url.deletingPathExtension().lastPathComponent,
+                    lastUsed: lastUsedDate(of: url)
+                ))
             }
         }
 
         return AppIndex(entries: entries)
+    }
+
+    /// Reads the launch date Spotlight already records for the bundle. `MDItem` is the only
+    /// public way to ask for a single file's indexed attributes without running a whole query,
+    /// and /Applications is not a protected location, so this needs no permission.
+    private static func lastUsedDate(of url: URL) -> Date? {
+        guard let item = MDItemCreateWithURL(kCFAllocatorDefault, url as CFURL) else { return nil }
+        return MDItemCopyAttribute(item, kMDItemLastUsedDate) as? Date
     }
 
     /// The single app whose name is exactly the query, ignoring case. Nil for anything else.
@@ -66,13 +85,41 @@ public struct AppIndex: Sendable {
         }
     }
 
-    /// Every app whose name contains the query — the Apps lane, which arrives in a later phase.
+    /// The Apps lane: every app whose name contains the query.
+    ///
+    /// With nothing typed it shows what was launched most recently rather than an alphabetical
+    /// wall — the list is there to be picked from, not read.
     public func matches(for query: String) -> [Entry] {
-        let needle = query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
-        guard !needle.isEmpty else { return entries.sorted { $0.name < $1.name } }
+        func fold(_ s: String) -> String {
+            s.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+        }
+
+        let needle = fold(query.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard !needle.isEmpty else { return entries.sorted(by: mostRecentlyUsed) }
 
         return entries
-            .filter { $0.name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).contains(needle) }
-            .sorted { $0.name < $1.name }
+            .filter { fold($0.name).contains(needle) }
+            .sorted { a, b in
+                // Best name match wins; ties fall back to what was used most recently.
+                let rankA = matchRank(fold(a.name), needle)
+                let rankB = matchRank(fold(b.name), needle)
+                return rankA == rankB ? mostRecentlyUsed(a, b) : rankA > rankB
+            }
+    }
+
+    private func matchRank(_ name: String, _ needle: String) -> Int {
+        if name == needle { return 3 }
+        if name.hasPrefix(needle) { return 2 }
+        if name.components(separatedBy: " ").contains(where: { $0.hasPrefix(needle) }) { return 1 }
+        return 0
+    }
+
+    private func mostRecentlyUsed(_ a: Entry, _ b: Entry) -> Bool {
+        switch (a.lastUsed, b.lastUsed) {
+        case let (x?, y?): return x == y ? a.name < b.name : x > y
+        case (_?, nil): return true
+        case (nil, _?): return false
+        case (nil, nil): return a.name < b.name
+        }
     }
 }

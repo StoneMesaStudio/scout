@@ -2,11 +2,28 @@ import AppKit
 import Observation
 import ScoutCore
 
+/// One line in the panel. Every lane produces these, which is what lets the arrow keys, Return
+/// and ⌘Return work identically no matter what is being searched.
+enum PanelRow: Identifiable {
+    /// An app. `pinned` marks the exact-name match that sits above file results.
+    case app(AppIndex.Entry, pinned: Bool)
+    case file(SearchResult)
+    case pane(SettingsPaneIndex.Pane)
+
+    var id: String {
+        switch self {
+        case .app(let entry, let pinned): "app:\(pinned):\(entry.url.path)"
+        case .file(let result): "file:\(result.url.path)"
+        case .pane(let pane): "pane:\(pane.identifier)"
+        }
+    }
+}
+
 /// Everything the panel shows and does.
 ///
-/// The order of operations is the product: scope and exclusions **remove** first, then the
-/// ranker sorts what survived. Nothing that was filtered out can drift back in, which is the
-/// specific failure that made Spotlight unusable for narrow searches.
+/// The order of operations is the product: scope and exclusions **remove** first, then filters
+/// remove again, and only then does the ranker sort what survived. Nothing filtered out can drift
+/// back in, which is the specific failure that made Spotlight unusable for narrow searches.
 @MainActor
 @Observable
 final class SearchModel {
@@ -17,22 +34,41 @@ final class SearchModel {
         didSet { scheduleSearch() }
     }
 
-    var scope: SearchScope = .myFiles {
-        didSet { runSearch() }
+    var lane: SearchLane = .files {
+        didSet {
+            guard lane != oldValue else { return }
+            filter.clear()
+            focusedFolder = nil
+            runSearch()
+        }
     }
+
+    var scope: SearchScope = .myFiles {
+        didSet {
+            guard scope != oldValue else { return }
+            runSearch()
+        }
+    }
+
+    /// The chips under the field. Changing one re-filters what is already on screen — no new
+    /// search is needed, so the list updates instantly.
+    var filter = FileFilter() {
+        didSet { rebuildRows() }
+    }
+
+    /// Which chips to offer, derived from the results themselves.
+    private(set) var suggestions = FilterSuggestions(folders: [], kinds: [], windows: [])
 
     /// Set by pressing Tab on a folder — the search then covers only that folder.
     private(set) var focusedFolder: URL?
     var focusedFolderName: String? { focusedFolder?.lastPathComponent }
 
-    private(set) var results: [SearchResult] = []
-    /// An app whose name the user typed exactly, pinned above the files.
-    private(set) var pinnedApp: AppIndex.Entry?
+    private(set) var rows: [PanelRow] = []
     /// How many matches the exclusions removed, so nothing disappears without a trace.
     private(set) var hiddenCount: Int = 0
 
     var showHidden: Bool = false {
-        didSet { applyRanking() }
+        didSet { rebuildRows() }
     }
 
     var selection: Int = 0
@@ -40,14 +76,14 @@ final class SearchModel {
     /// Called when the panel should close.
     var onDismiss: (() -> Void)?
 
-    /// Rows the arrow keys move through: the pinned app first, then the files.
-    var rowCount: Int { (pinnedApp == nil ? 0 : 1) + results.count }
+    var rowCount: Int { rows.count }
 
     // MARK: - Machinery
 
     private let searcher = SpotlightSearcher()
     private let ranker = Ranker()
     private let appIndex = AppIndex.scan()
+    private let paneIndex = SettingsPaneIndex.scan()
     private let pickMemory = PickMemory()
 
     private var rawResults: [SearchResult] = []
@@ -58,7 +94,7 @@ final class SearchModel {
         searcher.onResults = { [weak self] results in
             guard let self else { return }
             self.rawResults = results
-            self.applyRanking()
+            self.rebuildRows()
         }
     }
 
@@ -66,12 +102,13 @@ final class SearchModel {
 
     func reset() {
         text = ""
+        lane = .files
         scope = .myFiles
         focusedFolder = nil
         showHidden = false
+        filter.clear()
         rawResults = []
-        results = []
-        pinnedApp = nil
+        rows = []
         hiddenCount = 0
         selection = 0
     }
@@ -95,76 +132,126 @@ final class SearchModel {
 
     private func runSearch() {
         selection = 0
-        pinnedApp = appIndex.exactMatch(for: text)
-        searcher.search(text, scope: scope, folder: focusedFolder)
+        switch lane {
+        case .files:
+            searcher.search(text, scope: scope, folder: focusedFolder)
+        case .apps, .system:
+            // Both are small in-memory lists, so there is nothing to wait for.
+            searcher.stop()
+            rawResults = []
+            rebuildRows()
+        case .mail, .messages:
+            searcher.stop()
+            rawResults = []
+            rebuildRows()
+        }
     }
 
-    private func applyRanking() {
+    private func rebuildRows() {
+        switch lane {
+        case .files: rebuildFileRows()
+        case .apps: rows = appIndex.matches(for: text).map { .app($0, pinned: false) }
+        case .system: rows = paneIndex.matches(for: text).map { .pane($0) }
+        case .mail, .messages: rows = []
+        }
+        selection = min(selection, max(0, rows.count - 1))
+    }
+
+    private func rebuildFileRows() {
         let exclusions = showHidden ? Exclusions.none : Exclusions.standard
         let kept = rawResults.filter { !exclusions.excludes($0.url) }
         hiddenCount = rawResults.count - kept.count
 
         let ranked = ranker.rank(kept, query: text, learnedPicks: pickMemory.picks(for: text))
-        results = Array(ranked.prefix(resultLimit))
-        selection = min(selection, max(0, rowCount - 1))
+
+        // Chips are offered from the unfiltered set, so applying one never empties the row that
+        // would let you take it back off.
+        suggestions = FilterSuggestions.from(Array(ranked.prefix(300)))
+
+        let files = filter.apply(to: ranked).prefix(resultLimit).map { PanelRow.file($0) }
+
+        // The one exact app-name match sits above the files so Return still launches apps.
+        if let app = appIndex.exactMatch(for: text), focusedFolder == nil {
+            rows = [.app(app, pinned: true)] + files
+        } else {
+            rows = Array(files)
+        }
     }
 
     // MARK: - Moving around
 
     func moveSelection(by delta: Int) {
-        guard rowCount > 0 else { return }
-        selection = (selection + delta + rowCount) % rowCount
+        guard !rows.isEmpty else { return }
+        selection = (selection + delta + rows.count) % rows.count
     }
 
-    /// The file under the cursor, or nil when the pinned app row is selected.
-    var selectedResult: SearchResult? {
-        let offset = pinnedApp == nil ? 0 : 1
-        let index = selection - offset
-        guard index >= 0, index < results.count else { return nil }
-        return results[index]
+    func selectLane(_ lane: SearchLane) {
+        self.lane = lane
     }
 
-    var selectedIsPinnedApp: Bool {
-        pinnedApp != nil && selection == 0
+    /// ⌘1 … ⌘5.
+    func selectLane(number: Int) {
+        let lanes = SearchLane.allCases
+        guard number >= 1, number <= lanes.count else { return }
+        lane = lanes[number - 1]
+    }
+
+    var selectedRow: PanelRow? {
+        rows.indices.contains(selection) ? rows[selection] : nil
+    }
+
+    var selectedFile: SearchResult? {
+        if case .file(let result) = selectedRow { return result }
+        return nil
     }
 
     // MARK: - Doing something
 
-    /// Return: launch the app, or open the file.
+    /// Return: launch the app, open the file, or jump to the settings pane.
     func activate() {
-        if selectedIsPinnedApp, let app = pinnedApp {
-            NSWorkspace.shared.openApplication(at: app.url, configuration: NSWorkspace.OpenConfiguration())
-            onDismiss?()
+        switch selectedRow {
+        case .app(let entry, _):
+            NSWorkspace.shared.openApplication(at: entry.url, configuration: NSWorkspace.OpenConfiguration())
+        case .file(let result):
+            pickMemory.record(query: text, url: result.url)
+            NSWorkspace.shared.open(result.url)
+        case .pane(let pane):
+            if let url = pane.url { NSWorkspace.shared.open(url) }
+        case nil:
             return
         }
-        guard let result = selectedResult else { return }
-        pickMemory.record(query: text, url: result.url)
-        NSWorkspace.shared.open(result.url)
         onDismiss?()
     }
 
     /// ⌘Return: show it in the Finder rather than opening it.
     func revealInFinder() {
-        let url = selectedIsPinnedApp ? pinnedApp?.url : selectedResult?.url
+        let url: URL? = switch selectedRow {
+        case .app(let entry, _): entry.url
+        case .file(let result): result.url
+        case .pane, nil: nil
+        }
         guard let url else { return }
-        if let result = selectedResult { pickMemory.record(query: text, url: result.url) }
+        if let result = selectedFile { pickMemory.record(query: text, url: result.url) }
         NSWorkspace.shared.activateFileViewerSelecting([url])
         onDismiss?()
     }
 
     /// Tab: narrow the search into the selected folder.
     func drillIntoSelection() {
-        guard let result = selectedResult, result.kind == .folder else { return }
+        guard lane == .files, let result = selectedFile, result.kind == .folder else { return }
         focusedFolder = result.url
+        filter.clear()
         text = ""
         rawResults = []
-        results = []
+        rows = []
         hiddenCount = 0
     }
 
-    /// Escape: leave a folder first, close the panel only when there is nothing left to leave.
+    /// Escape: shed one layer at a time — filters, then the focused folder, then the panel.
     func escape() {
-        if focusedFolder != nil {
+        if !filter.isEmpty {
+            filter.clear()
+        } else if focusedFolder != nil {
             focusedFolder = nil
             runSearch()
         } else {
