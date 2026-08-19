@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Deliberately unsandboxed. A sandboxed app can only see files handed to it one at a
+	     time through an open panel, which would make a search tool pointless — and Full Disk
+	     Access, which the Mail and Messages lanes need, cannot be granted to a sandboxed app
+	     at all. This is why Scout ships as a signed direct download rather than on the App
+	     Store. -->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+</dict>
+</plist>

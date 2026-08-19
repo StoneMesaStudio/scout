@@ -1,0 +1,78 @@
+name: Scout
+options:
+  bundleIdPrefix: studio.stonemesa
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: "RD59TDS75G"
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_STRICT_CONCURRENCY: complete
+    ENABLE_HARDENED_RUNTIME: YES
+
+packages:
+  ScoutCore:
+    path: Core
+
+targets:
+  Scout:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+    dependencies:
+      - package: ScoutCore
+        product: ScoutCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: studio.stonemesa.scout
+        PRODUCT_NAME: Scout
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        GENERATE_INFOPLIST_FILE: YES
+        # Partial plist merged into the generated one — carries LSUIElement, which is what
+        # keeps Scout out of the Dock and the app switcher.
+        INFOPLIST_FILE: App/Support/Info.plist
+        INFOPLIST_KEY_NSHumanReadableCopyright: "© 2026 StoneMesa Studio"
+        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.utilities"
+        INFOPLIST_KEY_NSMainStoryboardFile: ""
+        CODE_SIGN_ENTITLEMENTS: App/Support/Scout.entitlements
+        ENABLE_PREVIEWS: YES
+        COMBINE_HIDPI_IMAGES: YES
+
+  # The ranking suite, compiled from the same files `swift test --package-path Core` runs, so
+  # there is one set of tests and two ways to run them. No test host: ScoutCore is pure logic.
+  ScoutTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Core/Tests/ScoutCoreTests
+    dependencies:
+      - package: ScoutCore
+        product: ScoutCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: studio.stonemesa.scout.tests
+        ENABLE_TESTABILITY: YES
+
+schemes:
+  # Declared explicitly so the test action is actually wired to the scheme — an auto-generated
+  # scheme builds the app alone and would let the gate pass without running a test.
+  Scout:
+    build:
+      targets:
+        Scout: all
+        ScoutTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: false
+      targets:
+        - ScoutTests
