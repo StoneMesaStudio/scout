@@ -15,6 +15,12 @@ final class PanelController {
 
     private var panel: SearchPanel?
     private let model = SearchModel()
+    private var resizeObserver: NSObjectProtocol?
+
+    /// Where the panel's top-left corner belongs. The panel grows and shrinks as results come and
+    /// go, and macOS measures windows from the bottom-left — so without pinning the top edge, the
+    /// search field would jump up the screen every time a result arrived.
+    private var anchor: NSPoint?
 
     /// The proportion of the screen height the panel's top edge sits at. Slightly above centre
     /// reads as "in front of your work" rather than "in the middle of it".
@@ -30,6 +36,7 @@ final class PanelController {
         model.reset()
         model.onDismiss = { [weak self] in self?.hide() }
 
+        panel.layoutIfNeeded()
         position(panel)
         // Bringing the app forward is what lets the text field take key focus. Dismissing hides
         // Scout again, which hands focus straight back to the app underneath.
@@ -65,9 +72,24 @@ final class PanelController {
         let host = NSHostingView(rootView: SearchRootView(model: model))
         host.sizingOptions = [.preferredContentSize]
         panel.contentView = host
+        panel.setContentSize(host.fittingSize)
+
+        resizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification,
+            object: panel,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reanchor() }
+        }
 
         self.panel = panel
         return panel
+    }
+
+    /// Put the top-left corner back where it was after the panel changed height.
+    private func reanchor() {
+        guard let panel, let anchor else { return }
+        panel.setFrameTopLeftPoint(anchor)
     }
 
     /// Put the panel on whichever screen the pointer is on — that is the screen the user is
@@ -78,9 +100,9 @@ final class PanelController {
             ?? NSScreen.main
         guard let frame = screen?.visibleFrame else { return }
 
-        let size = panel.frame.size
         let x = frame.midX - panelWidth / 2
-        let y = frame.maxY - (frame.height * verticalPlacement) - size.height
-        panel.setFrame(NSRect(x: x, y: y, width: panelWidth, height: size.height), display: false)
+        let top = frame.maxY - (frame.height * verticalPlacement)
+        anchor = NSPoint(x: x, y: top)
+        panel.setFrameTopLeftPoint(NSPoint(x: x, y: top))
     }
 }
