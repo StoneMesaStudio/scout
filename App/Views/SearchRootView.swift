@@ -1,27 +1,28 @@
 import SwiftUI
 import ScoutCore
 
-/// The panel: a field, the five lanes, the chips, results, and a line of keys along the bottom.
+/// The panel: a field, the source buttons, the chips, grouped results, and a line of keys along
+/// the bottom.
 struct SearchRootView: View {
 
     @Bindable var model: SearchModel
     @FocusState private var fieldFocused: Bool
 
+    /// Wide enough that a long filename and its folder both fit without eliding.
+    private let panelWidth: CGFloat = 820
+
     var body: some View {
         VStack(spacing: 0) {
             field
-            laneBar
+            sourceBar
             Divider().opacity(0.5)
 
-            if model.lane == .files, model.hasChips {
+            if model.hasChips {
                 FilterChipRow(model: model)
                 Divider().opacity(0.5)
             }
 
-            if model.status != .ready {
-                LaneStatusView(status: model.status, lane: model.lane)
-                Divider().opacity(0.5)
-            } else if model.rowCount > 0 || model.hiddenCount > 0 {
+            if !model.sections.isEmpty {
                 results
                 Divider().opacity(0.5)
             } else if !model.text.isEmpty {
@@ -31,11 +32,11 @@ struct SearchRootView: View {
 
             footer
         }
-        .frame(width: 680)
+        .frame(width: panelWidth)
         .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(.white.opacity(0.14), lineWidth: 1)
         )
         .onAppear { fieldFocused = true }
@@ -44,19 +45,19 @@ struct SearchRootView: View {
     // MARK: - Field
 
     private var field: some View {
-        HStack(spacing: 11) {
+        HStack(spacing: 13) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 17, weight: .medium))
+                .font(.system(size: 19, weight: .medium))
                 .foregroundStyle(.secondary)
 
             TextField(placeholder, text: $model.text)
                 .textFieldStyle(.plain)
-                .font(.system(size: 24, weight: .regular))
+                .font(.system(size: 27, weight: .regular))
                 .focused($fieldFocused)
         }
-        .padding(.horizontal, 17)
-        .padding(.top, 13)
-        .padding(.bottom, 9)
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+        .padding(.bottom, 11)
         .onKeyPress(.downArrow) { model.moveSelection(by: 1); return .handled }
         .onKeyPress(.upArrow) { model.moveSelection(by: -1); return .handled }
         .onKeyPress(.escape) { model.escape(); return .handled }
@@ -71,77 +72,63 @@ struct SearchRootView: View {
             }
             return .handled
         }
-        // ⌘L flips the scope, ⌘1…⌘5 switch lanes — all without leaving the keyboard.
-        .onKeyPress(keys: ["l", "1", "2", "3", "4", "5"]) { press in
+        // ⌘L flips the file scope, ⌘1…⌘6 switch a source on or off.
+        .onKeyPress(keys: ["l", "1", "2", "3", "4", "5", "6"]) { press in
             guard press.modifiers.contains(.command) else { return .ignored }
             if press.key.character == "l" {
                 model.toggleScope()
             } else if let number = Int(String(press.key.character)) {
-                model.selectLane(number: number)
+                model.toggleLane(number: number)
             }
             return .handled
         }
     }
 
     private var placeholder: String {
-        switch model.lane {
-        case .files: model.focusedFolderName.map { "Search in \($0)" } ?? "Search your files"
-        case .mail: "Search mail"
-        case .messages: "Search messages"
-        case .apps: "Open an app"
-        case .system: "Find a setting"
-        }
+        if let folder = model.focusedFolderName { return "Search in \(folder)" }
+        return "Search"
     }
 
-    // MARK: - Lanes
+    // MARK: - Sources
 
-    private var laneBar: some View {
-        HStack(spacing: 2) {
+    private var sourceBar: some View {
+        HStack(spacing: 7) {
             ForEach(SearchLane.allCases) { lane in
-                Button {
-                    model.selectLane(lane)
-                } label: {
-                    HStack(spacing: 5) {
-                        Text(lane.title)
-                        Text("⌘\(lane.shortcut)")
-                            .font(.system(size: 9.5, design: .monospaced))
-                            .opacity(0.55)
-                    }
-                    .font(.system(size: 12.5, weight: .medium))
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
-                    .background(
-                        model.lane == lane ? Color.accentColor.opacity(0.18) : .clear,
-                        in: RoundedRectangle(cornerRadius: 6)
-                    )
-                    .foregroundStyle(model.lane == lane ? Color.accentColor : .secondary)
+                SourceButton(
+                    lane: lane,
+                    isOn: model.enabledLanes.contains(lane)
+                ) {
+                    model.toggleLane(lane)
                 }
-                .buttonStyle(.plain)
             }
 
             Spacer()
             scopeControl
         }
-        .padding(.horizontal, 13)
-        .padding(.bottom, 9)
+        .padding(.horizontal, 17)
+        .padding(.bottom, 12)
     }
 
     /// The scope switch sits in the panel itself, not behind a menu — reaching it has to be
     /// cheaper than retyping the search somewhere else.
     @ViewBuilder
     private var scopeControl: some View {
-        if model.lane.hasScopes {
+        if model.enabledLanes.contains(.files) {
             if let folder = model.focusedFolderName {
-                HStack(spacing: 5) {
-                    Image(systemName: "folder")
-                    Text(folder).lineLimit(1)
-                    Image(systemName: "xmark.circle.fill").opacity(0.6)
+                Button {
+                    model.escape()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "folder")
+                        Text(folder).lineLimit(1)
+                        Image(systemName: "xmark.circle.fill").opacity(0.6)
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.accentColor.opacity(0.18), in: Capsule())
                 }
-                .font(.system(size: 11.5, weight: .medium))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(Color.accentColor.opacity(0.18), in: Capsule())
-                .onTapGesture { model.escape() }
+                .buttonStyle(.plain)
             } else {
                 Picker("", selection: $model.scope) {
                     ForEach(SearchScope.allCases) { scope in
@@ -151,7 +138,6 @@ struct SearchRootView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .fixedSize()
-                .controlSize(.small)
             }
         }
     }
@@ -161,26 +147,43 @@ struct SearchRootView: View {
     private var results: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 2) {
-                    ForEach(Array(model.rows.enumerated()), id: \.element.id) { index, row in
-                        PanelRowView(row: row, selected: model.selection == index)
-                            .id(index)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                model.selection = index
-                                model.activate()
-                            }
+                LazyVStack(alignment: .leading, spacing: 2, pinnedViews: [.sectionHeaders]) {
+                    ForEach(model.sections) { section in
+                        Section {
+                            sectionBody(section)
+                        } header: {
+                            SectionHeader(lane: section.lane, count: section.rows.count)
+                        }
                     }
 
-                    if model.lane == .files, model.hiddenCount > 0 {
+                    if model.enabledLanes.contains(.files), model.hiddenCount > 0 {
                         hiddenNotice
                     }
                 }
-                .padding(6)
+                .padding(8)
             }
-            .frame(maxHeight: 420)
+            .frame(maxHeight: 520)
             .onChange(of: model.selection) { _, new in
                 withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(new, anchor: .center) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sectionBody(_ section: PanelSection) -> some View {
+        if section.status != .ready {
+            LaneStatusView(status: section.status, lane: section.lane)
+        } else {
+            let start = model.startIndex(of: section)
+            ForEach(Array(section.rows.enumerated()), id: \.element.id) { offset, row in
+                let index = start + offset
+                PanelRowView(row: row, selected: model.selection == index)
+                    .id(index)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        model.selection = index
+                        model.activate()
+                    }
             }
         }
     }
@@ -199,60 +202,115 @@ struct SearchRootView: View {
                 Spacer()
                 Text(model.showHidden ? "Hide" : "Show").fontWeight(.semibold)
             }
-            .font(.system(size: 12))
-            .padding(.horizontal, 11)
-            .padding(.vertical, 7)
+            .font(.system(size: 12.5))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .padding(.top, 4)
+        .padding(.top, 6)
     }
 
-    /// "Nothing matched" has to be distinguishable from "still searching" and from "not
-    /// allowed to look" — the same blank list otherwise stands for all three.
+    /// "Nothing matched" has to be distinguishable from "still searching" and from "not allowed
+    /// to look" — the same blank list otherwise stands for all three.
     private var emptyState: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-            Text("Nothing in \(scopeDescription) matches “\(model.text)”.")
+            Text("Nothing matches “\(model.text)”.")
             Spacer()
-            if model.lane == .files, model.scope == .myFiles {
+            if model.enabledLanes.contains(.files), model.scope == .myFiles {
                 Button("Search the whole Mac") { model.toggleScope() }
                     .buttonStyle(.link)
             }
         }
-        .font(.system(size: 12.5))
+        .font(.system(size: 13))
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 18)
-    }
-
-    private var scopeDescription: String {
-        switch model.lane {
-        case .files: model.focusedFolderName ?? model.scope.title
-        case .mail: "your mail"
-        case .messages: "your messages"
-        case .apps: "your apps"
-        case .system: "System Settings"
-        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 20)
     }
 
     // MARK: - Footer
 
     private var footer: some View {
-        HStack(spacing: 14) {
-            KeyHint("return", model.lane == .system ? "Open pane" : "Open")
-            if model.lane == .files || model.lane == .apps {
-                KeyHint("⌘return", "Reveal in Finder")
-            }
-            if model.lane == .files {
-                KeyHint("tab", "Search inside folder")
-            }
+        HStack(spacing: 16) {
+            KeyHint("return", "Open")
+            KeyHint("⌘return", "Reveal in Finder")
+            KeyHint("tab", "Search inside folder")
+            KeyHint("⌘1–6", "Sources")
             Spacer()
             KeyHint("esc", "Dismiss")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+    }
+}
+
+// MARK: - Pieces
+
+/// A source switch. Drawn as a real button — raised, bordered, and obviously filled when on —
+/// because a row of bare words does not read as something you can press.
+private struct SourceButton: View {
+
+    let lane: SearchLane
+    let isOn: Bool
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: lane.symbol)
+                    .font(.system(size: 11, weight: .semibold))
+                Text(lane.title)
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .frame(minHeight: 28)
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isOn ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.quaternary))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(isOn ? Color.clear : Color.primary.opacity(hovering ? 0.28 : 0.16))
+            }
+            .foregroundStyle(isOn ? Color.white : .primary)
+            .shadow(color: .black.opacity(isOn ? 0.18 : 0.06), radius: 1, y: 1)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("⌘\(lane.shortcut) — turn \(lane.title) \(isOn ? "off" : "on")")
+    }
+}
+
+private struct SectionHeader: View {
+    let lane: SearchLane
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: lane.symbol)
+                .font(.system(size: 10, weight: .semibold))
+            Text(lane.title.uppercased())
+                .font(.system(size: 10.5, weight: .semibold))
+                .tracking(0.8)
+            if count > 0 {
+                Text("\(count)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .opacity(0.7)
+            }
+            Rectangle()
+                .fill(.quaternary)
+                .frame(height: 1)
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 4)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+        .background(.regularMaterial)
     }
 }
 
@@ -268,13 +326,13 @@ private struct KeyHint: View {
     var body: some View {
         HStack(spacing: 5) {
             Text(key)
-                .font(.system(size: 10.5, design: .monospaced))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
+                .font(.system(size: 11, design: .monospaced))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1.5)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 4))
             Text(label)
         }
-        .font(.system(size: 11))
+        .font(.system(size: 11.5))
         .foregroundStyle(.secondary)
     }
 }

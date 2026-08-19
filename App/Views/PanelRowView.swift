@@ -9,10 +9,13 @@ struct PanelRowView: View {
     let row: PanelRow
     let selected: Bool
 
-    /// A message is truncated at the end like a sentence, not in the middle like a filename.
+    /// A message or a subject line is truncated at the end like a sentence, not in the middle
+    /// like a filename.
     private var isMessage: Bool {
-        if case .message = row { return true }
-        return false
+        switch row {
+        case .message, .mail: true
+        default: false
+        }
     }
 
     var body: some View {
@@ -68,6 +71,8 @@ struct PanelRowView: View {
             symbolIcon("envelope.fill")
         case .message:
             symbolIcon("message.fill")
+        case .contact:
+            symbolIcon("person.crop.circle.fill")
         }
     }
 
@@ -87,6 +92,7 @@ struct PanelRowView: View {
         case .mail(let hit): hit.subject
         // A message has no title of its own, so the message *is* the title.
         case .message(let hit): hit.text
+        case .contact(let hit): hit.name
         }
     }
 
@@ -131,6 +137,9 @@ struct PanelRowView: View {
         case .message(let hit):
             let who = hit.isFromMe ? "You → \(hit.counterpart)" : hit.counterpart
             return "\(who) · \(hit.date.formatted(date: .abbreviated, time: .shortened))"
+
+        case .contact(let hit):
+            return hit.detail.isEmpty ? "Contact" : hit.detail
         }
     }
 
@@ -141,6 +150,7 @@ struct PanelRowView: View {
         case .pane: "return to open"
         case .mail: "return to open in Mail"
         case .message: "return to open the conversation"
+        case .contact: "return to open in Contacts"
         }
     }
 }

@@ -25,7 +25,7 @@ final class PanelController {
     /// The proportion of the screen height the panel's top edge sits at. Slightly above centre
     /// reads as "in front of your work" rather than "in the middle of it".
     private let verticalPlacement: CGFloat = 0.26
-    private let panelWidth: CGFloat = 680
+    private let panelWidth: CGFloat = 820
 
     func toggle() {
         if panel?.isVisible == true { hide() } else { show() }

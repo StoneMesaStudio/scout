@@ -1,12 +1,13 @@
 import Foundation
 
-/// The five things Scout can search, each on its own key.
+/// The six things Scout can search.
 ///
-/// They are lanes rather than sections because results never mix: a file search returns files,
-/// and mail only answers when asked. Blending them is what makes a search box feel like it is
-/// guessing, and guessing is the thing being replaced.
+/// Several can be on at once and each keeps its own section, so a search that covers files, mail
+/// and contacts still shows three labelled groups rather than one interleaved pile. Which ones are
+/// on is remembered between searches.
 public enum SearchLane: String, CaseIterable, Identifiable, Sendable {
     case files
+    case contacts
     case mail
     case messages
     case apps
@@ -17,6 +18,7 @@ public enum SearchLane: String, CaseIterable, Identifiable, Sendable {
     public var title: String {
         switch self {
         case .files: "Files"
+        case .contacts: "Contacts"
         case .mail: "Mail"
         case .messages: "Messages"
         case .apps: "Apps"
@@ -28,6 +30,7 @@ public enum SearchLane: String, CaseIterable, Identifiable, Sendable {
     public var symbol: String {
         switch self {
         case .files: "doc"
+        case .contacts: "person.crop.circle"
         case .mail: "envelope"
         case .messages: "message"
         case .apps: "square.grid.2x2"
@@ -35,7 +38,7 @@ public enum SearchLane: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// ⌘1 … ⌘5, in declaration order.
+    /// ⌘1 … ⌘6, in declaration order.
     public var shortcut: String {
         String((Self.allCases.firstIndex(of: self) ?? 0) + 1)
     }

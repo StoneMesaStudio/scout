@@ -15,5 +15,7 @@
 	<string>Scout searches your Desktop so it can find your files.</string>
 	<key>NSDownloadsFolderUsageDescription</key>
 	<string>Scout searches your Downloads folder so it can find your files.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Scout searches your contacts so you can find a person by name, number or address.</string>
 </dict>
 </plist>

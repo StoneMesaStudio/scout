@@ -2,7 +2,7 @@ import AppKit
 import Observation
 import ScoutCore
 
-/// One line in the panel. Every lane produces these, which is what lets the arrow keys, Return
+/// One line in the panel. Every source produces these, which is what lets the arrow keys, Return
 /// and ⌘Return work identically no matter what is being searched.
 enum PanelRow: Identifiable {
     /// An app. `pinned` marks the exact-name match that sits above file results.
@@ -11,6 +11,7 @@ enum PanelRow: Identifiable {
     case pane(SettingsPaneIndex.Pane)
     case mail(MailHit)
     case message(MessageHit)
+    case contact(ContactHit)
 
     var id: String {
         switch self {
@@ -19,24 +20,35 @@ enum PanelRow: Identifiable {
         case .pane(let pane): "pane:\(pane.identifier)"
         case .mail(let hit): "mail:\(hit.url.path)"
         case .message(let hit): "message:\(hit.rowID)"
+        case .contact(let hit): "contact:\(hit.identifier)"
         }
     }
 }
 
-/// Why a lane has nothing to show. An empty list and a missing permission look identical
+/// Why a source has nothing to show. An empty list and a missing permission look identical
 /// otherwise, and the second one is fixable.
 enum LaneStatus: Equatable {
     case ready
     case needsFullDiskAccess
+    case needsContactsAccess
     case building
     case failed(String)
 }
 
+/// One labelled group of results. Sources stay in their own sections rather than interleaving,
+/// so turning four of them on still reads as four answers instead of one pile.
+struct PanelSection: Identifiable {
+    let lane: SearchLane
+    var rows: [PanelRow]
+    var status: LaneStatus
+    var id: String { lane.rawValue }
+}
+
 /// Everything the panel shows and does.
 ///
-/// The order of operations is the product: scope and exclusions **remove** first, then filters
-/// remove again, and only then does the ranker sort what survived. Nothing filtered out can drift
-/// back in, which is the specific failure that made Spotlight unusable for narrow searches.
+/// The order of operations for files is the product: scope and exclusions **remove** first,
+/// then filters remove again, and only then does the ranker sort what survived. Nothing filtered
+/// out can drift back in, which is the specific failure that made Spotlight unusable.
 @MainActor
 @Observable
 final class SearchModel {
@@ -45,15 +57,6 @@ final class SearchModel {
 
     var text: String = "" {
         didSet { scheduleSearch() }
-    }
-
-    var lane: SearchLane = .files {
-        didSet {
-            guard lane != oldValue else { return }
-            filter.clear()
-            focusedFolder = nil
-            runSearch()
-        }
     }
 
     var scope: SearchScope = .myFiles {
@@ -66,81 +69,108 @@ final class SearchModel {
     /// The chips under the field. Changing one re-filters what is already on screen — no new
     /// search is needed, so the list updates instantly.
     var filter = FileFilter() {
-        didSet { rebuildRows() }
+        didSet { rebuildSections() }
     }
 
-    /// Which chips to offer, derived from the results themselves.
     private(set) var suggestions = FilterSuggestions(folders: [], kinds: [], windows: [])
 
-    /// Set by pressing Tab on a folder — the search then covers only that folder.
+    /// Set by pressing Tab on a folder — the file search then covers only that folder.
     private(set) var focusedFolder: URL?
     var focusedFolderName: String? { focusedFolder?.lastPathComponent }
 
-    private(set) var rows: [PanelRow] = []
-    private(set) var status: LaneStatus = .ready
-    /// How many matches the exclusions removed, so nothing disappears without a trace.
+    private(set) var sections: [PanelSection] = []
+    /// How many file matches the exclusions removed, so nothing disappears without a trace.
     private(set) var hiddenCount: Int = 0
 
     var showHidden: Bool = false {
-        didSet { rebuildRows() }
+        didSet { rebuildSections() }
     }
 
     var selection: Int = 0
-
-    /// Called when the panel should close.
     var onDismiss: (() -> Void)?
 
+    /// Which sources are switched on. Remembered between searches and between launches.
+    var enabledLanes: Set<SearchLane> {
+        get { settings.enabledLanes }
+        set {
+            // At least one source has to stay on, or the panel has nothing to do.
+            guard !newValue.isEmpty else { return }
+            settings.enabledLanes = newValue
+            runSearch()
+        }
+    }
+
+    /// Every row across every section, in the order they are drawn — what the arrow keys walk.
+    var rows: [PanelRow] { sections.flatMap(\.rows) }
     var rowCount: Int { rows.count }
+
+    var pinnedPlaces: [URL] { settings.pinnedPlaces }
+
+    var hasChips: Bool {
+        enabledLanes.contains(.files) && (!pinnedPlaces.isEmpty || !suggestions.isEmpty)
+    }
 
     // MARK: - Machinery
 
     private let searcher = SpotlightSearcher()
     private let mailSearcher = MailSearcher()
     private let messages = MessageSearchService()
+    private let contacts = ContactSearcher()
     private let ranker = Ranker()
     private let appIndex = AppIndex.scan()
     private let paneIndex = SettingsPaneIndex.scan()
     private let pickMemory = PickMemory()
     private let settings = ScoutSettings.shared
 
-    private var rawResults: [SearchResult] = []
-    private var debounce: Task<Void, Never>?
-    private let resultLimit = 60
+    private var rawFiles: [SearchResult] = []
+    private var mailRows: [PanelRow] = []
+    private var messageRows: [PanelRow] = []
+    private var contactRows: [PanelRow] = []
 
+    private var mailStatus: LaneStatus = .ready
+    private var messageStatus: LaneStatus = .ready
+    private var contactStatus: LaneStatus = .ready
+
+    private var debounce: Task<Void, Never>?
     private var messageTask: Task<Void, Never>?
+
+    /// Per-section caps. Files get the room; the rest are there to answer, not to fill the panel.
+    private let fileLimit = 25
+    private let sideLimit = 6
 
     init() {
         searcher.onResults = { [weak self] results in
             guard let self else { return }
-            self.rawResults = results
-            self.rebuildRows()
+            self.rawFiles = results
+            self.rebuildSections()
         }
         mailSearcher.onResults = { [weak self] hits in
-            guard let self, self.lane == .mail else { return }
-            self.rows = hits.map { .mail($0) }
-            self.status = .ready
-            self.selection = min(self.selection, max(0, self.rows.count - 1))
+            guard let self else { return }
+            self.mailRows = hits.prefix(self.sideLimit).map { .mail($0) }
+            self.mailStatus = .ready
+            self.rebuildSections()
         }
     }
 
     // MARK: - Lifecycle
 
-    /// Folders the user pinned in settings. They get a chip whether or not this search found
-    /// anything in them.
-    var pinnedPlaces: [URL] { settings.pinnedPlaces }
-
     func reset() {
         text = ""
-        lane = .files
         scope = settings.defaultScope
         focusedFolder = nil
         showHidden = false
         filter.clear()
-        rawResults = []
-        rows = []
-        hiddenCount = 0
+        clearResults()
         selection = 0
-        status = .ready
+    }
+
+    private func clearResults() {
+        rawFiles = []
+        mailRows = []
+        messageRows = []
+        contactRows = []
+        sections = []
+        hiddenCount = 0
     }
 
     func stop() {
@@ -167,71 +197,106 @@ final class SearchModel {
         searcher.stop()
         mailSearcher.stop()
         messageTask?.cancel()
+        clearResults()
 
-        switch lane {
-        case .files:
-            status = .ready
+        let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if enabledLanes.contains(.files) {
             searcher.search(text, scope: scope, folder: focusedFolder)
+        }
 
-        case .apps, .system:
-            // Both are small in-memory lists, so there is nothing to wait for.
-            status = .ready
-            rawResults = []
-            rebuildRows()
+        if enabledLanes.contains(.mail) {
+            mailStatus = mailSearcher.isIndexReadable ? .ready : .needsFullDiskAccess
+            if mailStatus == .ready { mailSearcher.search(text) }
+        }
 
-        case .mail:
-            rows = []
-            status = mailSearcher.isIndexReadable ? .ready : .needsFullDiskAccess
-            if case .ready = status { mailSearcher.search(text) }
+        if enabledLanes.contains(.contacts) {
+            switch contacts.access {
+            case .allowed:
+                contactStatus = .ready
+                contactRows = contacts.search(query, limit: sideLimit).map { .contact($0) }
+            case .notRequested:
+                contactStatus = .needsContactsAccess
+                askForContacts()
+            case .denied:
+                contactStatus = .needsContactsAccess
+            }
+        }
 
-        case .messages:
-            rows = []
-            searchMessages()
+        if enabledLanes.contains(.messages), query.count >= 2 {
+            searchMessages(query)
+        }
+
+        rebuildSections()
+    }
+
+    /// macOS shows its own prompt the first time. Asking on the first search rather than at
+    /// launch means the request arrives when it is obviously about something the user just did.
+    private func askForContacts() {
+        Task { [contacts] in
+            let granted = await contacts.requestAccess()
+            guard granted else { return }
+            self.runSearch()
         }
     }
 
     /// The Messages index is built and read off the main thread, so the panel keeps responding
     /// while a long history is read for the first time.
-    private func searchMessages() {
-        let query = text
-        status = .building
-        messageTask = Task { [messages] in
+    private func searchMessages(_ query: String) {
+        messageStatus = .building
+        messageTask = Task { [messages, sideLimit] in
             await messages.prepare()
             let state = await messages.currentState()
-            let hits = query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2
-                ? await messages.search(query)
-                : []
-
+            let hits = await messages.search(query, limit: sideLimit)
             guard !Task.isCancelled else { return }
             self.applyMessages(hits, state: state, query: query)
         }
     }
 
     private func applyMessages(_ hits: [MessageHit], state: MessageSearchService.State, query: String) {
-        guard lane == .messages, query == text else { return }
+        guard query == text.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
         switch state {
-        case .needsFullDiskAccess: status = .needsFullDiskAccess
-        case .failed(let reason): status = .failed(reason)
-        case .idle, .building, .ready: status = .ready
+        case .needsFullDiskAccess: messageStatus = .needsFullDiskAccess
+        case .failed(let reason): messageStatus = .failed(reason)
+        case .idle, .building, .ready: messageStatus = .ready
         }
-        rows = hits.map { .message($0) }
-        selection = min(selection, max(0, rows.count - 1))
+        messageRows = hits.map { .message($0) }
+        rebuildSections()
     }
 
-    private func rebuildRows() {
-        switch lane {
-        case .files: rebuildFileRows()
-        case .apps: rows = appIndex.matches(for: text).map { .app($0, pinned: false) }
-        case .system: rows = paneIndex.matches(for: text).map { .pane($0) }
-        case .mail, .messages: break  // filled in by their own asynchronous searches
+    // MARK: - Assembling the panel
+
+    private func rebuildSections() {
+        var built: [PanelSection] = []
+
+        for lane in SearchLane.allCases where enabledLanes.contains(lane) {
+            switch lane {
+            case .files:
+                built.append(PanelSection(lane: .files, rows: fileRows(), status: .ready))
+            case .contacts:
+                built.append(PanelSection(lane: .contacts, rows: contactRows, status: contactStatus))
+            case .mail:
+                built.append(PanelSection(lane: .mail, rows: mailRows, status: mailStatus))
+            case .messages:
+                built.append(PanelSection(lane: .messages, rows: messageRows, status: messageStatus))
+            case .apps:
+                let rows = appIndex.matches(for: text).prefix(sideLimit).map { PanelRow.app($0, pinned: false) }
+                built.append(PanelSection(lane: .apps, rows: Array(rows), status: .ready))
+            case .system:
+                let rows = paneIndex.matches(for: text).prefix(sideLimit).map { PanelRow.pane($0) }
+                built.append(PanelSection(lane: .system, rows: Array(rows), status: .ready))
+            }
         }
-        selection = min(selection, max(0, rows.count - 1))
+
+        // A section with neither results nor anything to say is not worth a heading.
+        sections = built.filter { !$0.rows.isEmpty || $0.status != .ready }
+        selection = min(selection, max(0, rowCount - 1))
     }
 
-    private func rebuildFileRows() {
+    private func fileRows() -> [PanelRow] {
         let exclusions = showHidden ? Exclusions.none : settings.exclusions
-        let kept = rawResults.filter { !exclusions.excludes($0.url) }
-        hiddenCount = rawResults.count - kept.count
+        let kept = rawFiles.filter { !exclusions.excludes($0.url) }
+        hiddenCount = rawFiles.count - kept.count
 
         let ranked = ranker.rank(kept, query: text, learnedPicks: pickMemory.picks(for: text))
 
@@ -239,32 +304,43 @@ final class SearchModel {
         // would let you take it back off.
         suggestions = FilterSuggestions.from(Array(ranked.prefix(300)))
 
-        let files = filter.apply(to: ranked).prefix(resultLimit).map { PanelRow.file($0) }
+        let files = filter.apply(to: ranked).prefix(fileLimit).map { PanelRow.file($0) }
 
-        // The one exact app-name match sits above the files so Return still launches apps.
+        // The one exact app-name match sits at the very top so Return still launches apps.
         if settings.pinExactAppMatch, let app = appIndex.exactMatch(for: text), focusedFolder == nil {
-            rows = [.app(app, pinned: true)] + files
-        } else {
-            rows = Array(files)
+            return [.app(app, pinned: true)] + files
         }
+        return Array(files)
     }
 
     // MARK: - Moving around
 
     func moveSelection(by delta: Int) {
-        guard !rows.isEmpty else { return }
-        selection = (selection + delta + rows.count) % rows.count
+        guard rowCount > 0 else { return }
+        selection = (selection + delta + rowCount) % rowCount
     }
 
-    func selectLane(_ lane: SearchLane) {
-        self.lane = lane
+    func toggleLane(_ lane: SearchLane) {
+        var updated = enabledLanes
+        if updated.contains(lane) { updated.remove(lane) } else { updated.insert(lane) }
+        enabledLanes = updated
     }
 
-    /// ⌘1 … ⌘5.
-    func selectLane(number: Int) {
+    /// ⌘1 … ⌘6 toggle a source on or off.
+    func toggleLane(number: Int) {
         let lanes = SearchLane.allCases
         guard number >= 1, number <= lanes.count else { return }
-        lane = lanes[number - 1]
+        toggleLane(lanes[number - 1])
+    }
+
+    /// The row index at which a section starts, for drawing the selection.
+    func startIndex(of section: PanelSection) -> Int {
+        var index = 0
+        for candidate in sections {
+            if candidate.id == section.id { return index }
+            index += candidate.rows.count
+        }
+        return index
     }
 
     var selectedRow: PanelRow? {
@@ -278,7 +354,7 @@ final class SearchModel {
 
     // MARK: - Doing something
 
-    /// Return: launch the app, open the file, or jump to the settings pane.
+    /// Return: open whatever is selected, in whatever app owns it.
     func activate() {
         switch selectedRow {
         case .app(let entry, _):
@@ -290,13 +366,15 @@ final class SearchModel {
             if let url = pane.url { NSWorkspace.shared.open(url) }
         case .mail(let hit):
             NSWorkspace.shared.open(hit.openURL)
+        case .contact(let hit):
+            if let url = hit.openURL { NSWorkspace.shared.open(url) }
         case .message(let hit):
             // Without a conversation to open, fall back to launching Messages itself rather
             // than doing nothing.
             if let url = hit.openURL {
                 NSWorkspace.shared.open(url)
-            } else if let messages = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.MobileSMS") {
-                NSWorkspace.shared.openApplication(at: messages, configuration: NSWorkspace.OpenConfiguration())
+            } else if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.MobileSMS") {
+                NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration())
             }
         case nil:
             return
@@ -310,7 +388,7 @@ final class SearchModel {
         case .app(let entry, _): entry.url
         case .file(let result): result.url
         case .mail(let hit): hit.url
-        case .pane, .message, nil: nil
+        case .pane, .message, .contact, nil: nil
         }
         guard let url else { return }
         if let result = selectedFile { pickMemory.record(query: text, url: result.url) }
@@ -318,15 +396,13 @@ final class SearchModel {
         onDismiss?()
     }
 
-    /// Tab: narrow the search into the selected folder.
+    /// Tab: narrow the file search into the selected folder.
     func drillIntoSelection() {
-        guard lane == .files, let result = selectedFile, result.kind == .folder else { return }
+        guard let result = selectedFile, result.kind == .folder else { return }
         focusedFolder = result.url
         filter.clear()
         text = ""
-        rawResults = []
-        rows = []
-        hiddenCount = 0
+        clearResults()
     }
 
     /// Escape: shed one layer at a time — filters, then the focused folder, then the panel.
@@ -343,11 +419,5 @@ final class SearchModel {
 
     func toggleScope() {
         scope = scope == .myFiles ? .wholeMac : .myFiles
-    }
-
-    /// True when the chip row has something to show — pinned places count even before a search
-    /// has found anything.
-    var hasChips: Bool {
-        !pinnedPlaces.isEmpty || !suggestions.isEmpty
     }
 }

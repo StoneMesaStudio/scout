@@ -30,10 +30,9 @@ struct LaneStatusView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                if status == .needsFullDiskAccess {
-                    Button("Open Full Disk Access") {
-                        let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles")
-                        if let url { NSWorkspace.shared.open(url) }
+                if let permissionPane {
+                    Button(permissionPane.title) {
+                        if let url = URL(string: permissionPane.url) { NSWorkspace.shared.open(url) }
                     }
                     .buttonStyle(.link)
                     .font(.system(size: 12))
@@ -47,8 +46,23 @@ struct LaneStatusView: View {
         .padding(.vertical, 16)
     }
 
+    /// The settings pane that would fix this, when one would.
+    private var permissionPane: (title: String, url: String)? {
+        switch status {
+        case .needsFullDiskAccess:
+            ("Open Full Disk Access",
+             "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles")
+        case .needsContactsAccess:
+            ("Open Contacts permissions",
+             "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Contacts")
+        default:
+            nil
+        }
+    }
+
     private var symbol: String {
         switch status {
+        case .needsContactsAccess: "lock"
         case .needsFullDiskAccess: "lock"
         case .building: "clock"
         case .failed: "exclamationmark.triangle"
@@ -58,7 +72,7 @@ struct LaneStatusView: View {
 
     private var tint: Color {
         switch status {
-        case .needsFullDiskAccess, .building: .secondary
+        case .needsFullDiskAccess, .needsContactsAccess, .building: .secondary
         case .failed: .orange
         case .ready: .secondary
         }
@@ -66,6 +80,8 @@ struct LaneStatusView: View {
 
     private var headline: String {
         switch status {
+        case .needsContactsAccess:
+            "Scout can’t read your contacts yet"
         case .needsFullDiskAccess:
             "Scout can’t read your \(lane == .mail ? "mail" : "messages") yet"
         case .building:
@@ -79,6 +95,8 @@ struct LaneStatusView: View {
 
     private var detail: String? {
         switch status {
+        case .needsContactsAccess:
+            "Allow Scout in Privacy & Security › Contacts. Nothing leaves this Mac."
         case .needsFullDiskAccess:
             "macOS keeps mail and messages locked away until you allow it. Turn on Scout in Full Disk Access, then come back — you only do this once."
         case .building:

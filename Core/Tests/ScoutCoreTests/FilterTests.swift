@@ -166,3 +166,40 @@ private func folder(_ path: String, modified: Date? = nil) -> SearchResult {
         #expect(index.matches(for: "").map(\.name) == ["Mail", "Gmail Helper", "Mailbutler"])
     }
 }
+
+@Suite struct ContactHitTests {
+
+    @Test func theDetailLineLeadsWithHowYouWouldReachThem() {
+        let hit = ContactHit(
+            identifier: "ABC",
+            name: "Jose Ramirez",
+            organization: "Capitol Ford",
+            phone: "+1 916-555-0142",
+            email: "jose@example.com"
+        )
+        #expect(hit.detail == "+1 916-555-0142 · jose@example.com · Capitol Ford")
+    }
+
+    @Test func aContactWithNothingButANameSaysNothingElse() {
+        let hit = ContactHit(identifier: "ABC", name: "Jose", organization: nil, phone: nil, email: nil)
+        #expect(hit.detail.isEmpty)
+    }
+
+    @Test func aCardOpensInContacts() {
+        let hit = ContactHit(identifier: "ABC-123", name: "Jose", organization: nil, phone: nil, email: nil)
+        #expect(hit.openURL?.absoluteString == "addressbook://ABC-123")
+    }
+}
+
+@Suite struct LaneTests {
+
+    @Test func everyLaneHasItsOwnNumber() {
+        #expect(SearchLane.allCases.map(\.shortcut) == ["1", "2", "3", "4", "5", "6"])
+    }
+
+    @Test func onlyFilesHasScopes() {
+        #expect(SearchLane.files.hasScopes)
+        #expect(!SearchLane.contacts.hasScopes)
+        #expect(!SearchLane.mail.hasScopes)
+    }
+}

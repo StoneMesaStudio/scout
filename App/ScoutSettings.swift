@@ -24,6 +24,11 @@ final class ScoutSettings {
         excludeDeveloperFolders = store.object(forKey: Key.excludeDeveloper) as? Bool ?? true
         excludeSystemFolders = store.object(forKey: Key.excludeSystem) as? Bool ?? true
         pinExactAppMatch = store.object(forKey: Key.pinExactAppMatch) as? Bool ?? true
+
+        // Files, Contacts, Mail, Messages and Apps on; System off, because it is the one people
+        // reach for deliberately rather than constantly.
+        let saved = store.stringArray(forKey: Key.enabledLanes)?.compactMap(SearchLane.init(rawValue:))
+        enabledLanes = Set(saved ?? [.files, .contacts, .mail, .messages, .apps])
         hasSeenWelcome = store.bool(forKey: Key.hasSeenWelcome)
     }
 
@@ -34,6 +39,7 @@ final class ScoutSettings {
         static let excludeDeveloper = "excludeDeveloperFolders"
         static let excludeSystem = "excludeSystemFolders"
         static let pinExactAppMatch = "pinExactAppMatch"
+        static let enabledLanes = "enabledLanes"
         static let hasSeenWelcome = "hasSeenWelcome"
     }
 
@@ -57,6 +63,11 @@ final class ScoutSettings {
 
     var excludeSystemFolders: Bool {
         didSet { store.set(excludeSystemFolders, forKey: Key.excludeSystem) }
+    }
+
+    /// Which sources the panel searches. Remembered, so the set you use is the set you get.
+    var enabledLanes: Set<SearchLane> {
+        didSet { store.set(enabledLanes.map(\.rawValue), forKey: Key.enabledLanes) }
     }
 
     /// Typing an app's name exactly puts that app at the top of the file results.

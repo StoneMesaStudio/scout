@@ -34,6 +34,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         item.button?.image?.isTemplate = true
 
+        // Clicking the icon opens the panel; the menu is on right-click. Hanging a menu off the
+        // left button would put a list of housekeeping commands between the user and the one
+        // thing they clicked it for.
+        item.button?.action = #selector(statusItemClicked)
+        item.button?.target = self
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+
+        statusItem = item
+    }
+
+    private func buildMenu() -> NSMenu {
         let menu = NSMenu()
         menu.addItem(withTitle: "Search…", action: #selector(showPanel), keyEquivalent: "")
             .target = self
@@ -42,11 +53,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .target = self
         menu.addItem(withTitle: "Getting Started…", action: #selector(showWelcome), keyEquivalent: "")
             .target = self
+        menu.addItem(withTitle: "Diagnose Mail & Messages…", action: #selector(runDiagnostic), keyEquivalent: "")
+            .target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Scout", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        item.menu = menu
+        return menu
+    }
 
-        statusItem = item
+    @objc private func statusItemClicked() {
+        let rightClick = NSApp.currentEvent?.type == .rightMouseUp
+            || NSApp.currentEvent?.modifierFlags.contains(.control) == true
+
+        guard let item = statusItem else { return }
+
+        if rightClick {
+            // Attaching the menu, popping it, then detaching keeps the left button free.
+            item.menu = buildMenu()
+            item.button?.performClick(nil)
+            item.menu = nil
+        } else {
+            panel.toggle()
+        }
+    }
+
+    @objc private func runDiagnostic() {
+        let report = Diagnostics.report()
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Desktop/Scout Diagnostic.txt")
+        try? report.write(to: url, atomically: true, encoding: .utf8)
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     // MARK: - Hotkeys
