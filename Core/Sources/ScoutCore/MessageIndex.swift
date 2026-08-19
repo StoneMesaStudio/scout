@@ -49,7 +49,7 @@ public final class MessageIndex {
     /// True when `chat.db` can be opened at all — the plain-language version of "has the user
     /// granted Full Disk Access yet".
     public var sourceIsReadable: Bool {
-        FileManager.default.isReadableFile(atPath: source.path)
+        StoreAccess.canRead(file: source)
     }
 
     // MARK: - Building

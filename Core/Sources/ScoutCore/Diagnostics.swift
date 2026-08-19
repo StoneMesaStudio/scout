@@ -30,7 +30,7 @@ public enum Diagnostics {
         let fm = FileManager.default
         let root = home.appending(path: "Library/Mail")
 
-        guard fm.isReadableFile(atPath: root.path) else {
+        guard StoreAccess.canRead(directory: root) else {
             lines.append("~/Library/Mail is not readable — Full Disk Access has not been granted.")
             return lines
         }
@@ -113,7 +113,7 @@ public enum Diagnostics {
         var lines = ["MESSAGES", "--------"]
         let source = MessageIndex.defaultSource(home: home)
 
-        guard FileManager.default.isReadableFile(atPath: source.path) else {
+        guard StoreAccess.canRead(file: source) else {
             lines.append("chat.db is not readable — Full Disk Access has not been granted.")
             return lines
         }

@@ -11,6 +11,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let welcome = WelcomeWindowController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // `Scout --diagnose <path>` writes the report and quits, so the check can be run without
+        // anyone having to find a menu item.
+        if let index = CommandLine.arguments.firstIndex(of: "--diagnose") {
+            let destination = CommandLine.arguments.count > index + 1
+                ? URL(filePath: CommandLine.arguments[index + 1])
+                : FileManager.default.homeDirectoryForCurrentUser.appending(path: "Desktop/Scout Diagnostic.txt")
+            try? Diagnostics.report().write(to: destination, atomically: true, encoding: .utf8)
+            NSApp.terminate(nil)
+            return
+        }
+
         installStatusItem()
         installHotKeys()
 

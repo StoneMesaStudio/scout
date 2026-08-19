@@ -52,7 +52,7 @@ public final class MailSearcher {
     /// False when Mail's storage cannot be read at all — the plain-language version of "Full Disk
     /// Access has not been granted".
     public var isIndexReadable: Bool {
-        FileManager.default.isReadableFile(atPath: Self.mailDirectory(home: home).path)
+        StoreAccess.canRead(directory: Self.mailDirectory(home: home))
     }
 
     public func stop() {
