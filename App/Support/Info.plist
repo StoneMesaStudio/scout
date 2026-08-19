@@ -5,5 +5,15 @@
 	<!-- Menu-bar app: no Dock icon, no app-switcher entry, no window at launch. -->
 	<key>LSUIElement</key>
 	<true/>
+
+	<!-- macOS shows these sentences in the permission prompts the first time a search reaches
+	     one of these folders. Without them the prompt is a bare "Scout would like to access…",
+	     which reads like something to deny. -->
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Scout searches your Documents folder so it can find your files.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Scout searches your Desktop so it can find your files.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Scout searches your Downloads folder so it can find your files.</string>
 </dict>
 </plist>

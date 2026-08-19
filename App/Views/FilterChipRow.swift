@@ -13,7 +13,20 @@ struct FilterChipRow: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(model.suggestions.folders) { folder in
+                // Pinned places first: they are the same on every search, so their position
+                // stays learnable.
+                ForEach(model.pinnedPlaces, id: \.self) { place in
+                    Chip(
+                        caption: "Pinned",
+                        label: place.lastPathComponent,
+                        symbol: "pin.fill",
+                        active: model.filter.folders.contains(place)
+                    ) {
+                        model.filter.toggle(folder: place)
+                    }
+                }
+
+                ForEach(model.suggestions.folders.filter { !model.pinnedPlaces.contains($0.url) }) { folder in
                     Chip(
                         caption: "In",
                         label: folder.name,

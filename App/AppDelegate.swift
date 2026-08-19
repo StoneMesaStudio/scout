@@ -8,10 +8,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusItem: NSStatusItem?
     private let panel = PanelController()
+    private let welcome = WelcomeWindowController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installStatusItem()
         installHotKeys()
+
+        // First run: nothing about a menu-bar app with no Dock icon tells a new user it started,
+        // let alone that ⌘-Space still belongs to Spotlight.
+        if !ScoutSettings.shared.hasSeenWelcome {
+            ScoutSettings.shared.hasSeenWelcome = true
+            welcome.show()
+        }
     }
 
     // MARK: - Menu bar
@@ -31,6 +39,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
+            .target = self
+        menu.addItem(withTitle: "Getting Started…", action: #selector(showWelcome), keyEquivalent: "")
             .target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Scout", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -56,6 +66,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showPanel() {
         panel.show()
+    }
+
+    @objc private func showWelcome() {
+        welcome.show()
     }
 
     @objc private func showSettings() {

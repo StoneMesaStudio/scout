@@ -13,7 +13,7 @@ struct SearchRootView: View {
             laneBar
             Divider().opacity(0.5)
 
-            if model.lane == .files, !model.suggestions.isEmpty {
+            if model.lane == .files, model.hasChips {
                 FilterChipRow(model: model)
                 Divider().opacity(0.5)
             }

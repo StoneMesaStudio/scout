@@ -101,6 +101,7 @@ final class SearchModel {
     private let appIndex = AppIndex.scan()
     private let paneIndex = SettingsPaneIndex.scan()
     private let pickMemory = PickMemory()
+    private let settings = ScoutSettings.shared
 
     private var rawResults: [SearchResult] = []
     private var debounce: Task<Void, Never>?
@@ -124,10 +125,14 @@ final class SearchModel {
 
     // MARK: - Lifecycle
 
+    /// Folders the user pinned in settings. They get a chip whether or not this search found
+    /// anything in them.
+    var pinnedPlaces: [URL] { settings.pinnedPlaces }
+
     func reset() {
         text = ""
         lane = .files
-        scope = .myFiles
+        scope = settings.defaultScope
         focusedFolder = nil
         showHidden = false
         filter.clear()
@@ -224,7 +229,7 @@ final class SearchModel {
     }
 
     private func rebuildFileRows() {
-        let exclusions = showHidden ? Exclusions.none : Exclusions.standard
+        let exclusions = showHidden ? Exclusions.none : settings.exclusions
         let kept = rawResults.filter { !exclusions.excludes($0.url) }
         hiddenCount = rawResults.count - kept.count
 
@@ -237,7 +242,7 @@ final class SearchModel {
         let files = filter.apply(to: ranked).prefix(resultLimit).map { PanelRow.file($0) }
 
         // The one exact app-name match sits above the files so Return still launches apps.
-        if let app = appIndex.exactMatch(for: text), focusedFolder == nil {
+        if settings.pinExactAppMatch, let app = appIndex.exactMatch(for: text), focusedFolder == nil {
             rows = [.app(app, pinned: true)] + files
         } else {
             rows = Array(files)
@@ -338,5 +343,11 @@ final class SearchModel {
 
     func toggleScope() {
         scope = scope == .myFiles ? .wholeMac : .myFiles
+    }
+
+    /// True when the chip row has something to show — pinned places count even before a search
+    /// has found anything.
+    var hasChips: Bool {
+        !pinnedPlaces.isEmpty || !suggestions.isEmpty
     }
 }
