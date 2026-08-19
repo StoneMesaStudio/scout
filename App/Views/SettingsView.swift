@@ -15,7 +15,7 @@ struct SettingsView: View {
             PermissionSettings()
                 .tabItem { Label("Permissions", systemImage: "lock") }
         }
-        .frame(width: 520, height: 400)
+        .frame(width: 580, height: 470)
     }
 }
 
@@ -170,48 +170,142 @@ private struct FolderList: View {
 
 // MARK: - Permissions
 
+/// Every permission Scout needs, what each one buys, whether it is on, and a button that does as
+/// much as macOS allows an app to do about it.
+///
+/// The list re-checks itself while the window is open, so walking over to System Settings and
+/// back is enough — there is nothing to press afterwards to make it notice.
 private struct PermissionSettings: View {
 
-    @State private var spotlightOwnsCommandSpace = SpotlightShortcut.isEnabled
+    @State private var center = PermissionCenter()
+    @State private var busy: String?
+
+    /// macOS gives no notification when a permission changes, so the only way to keep up with a
+    /// trip to System Settings is to look again periodically.
+    private let heartbeat = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        Form {
-            Section("The ⌘-Space shortcut") {
-                if spotlightOwnsCommandSpace {
-                    Text("macOS is still giving ⌘-Space to Spotlight. Until you turn that off, use ⌥-Space to open Scout — both work.")
-                        .font(.callout)
-                    Text("In Keyboard Shortcuts, choose Spotlight and untick “Show Spotlight search”.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Button("Open Keyboard Shortcuts") {
-                        open("x-apple.systempreferences:com.apple.Keyboard-Settings.extension")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Scout asks for as little as it can, and everything it reads stays on this Mac.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 2)
+
+                ForEach(center.permissions) { permission in
+                    PermissionRow(permission: permission, busy: busy == permission.id) {
+                        busy = permission.id
+                        Task {
+                            await center.act(on: permission)
+                            busy = nil
+                        }
                     }
-                } else {
-                    Label("⌘-Space opens Scout.", systemImage: "checkmark.circle")
-                        .foregroundStyle(.green)
-                    Text("⌥-Space works too.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
 
-                Button("Check again") { spotlightOwnsCommandSpace = SpotlightShortcut.isEnabled }
-                    .buttonStyle(.link)
-            }
-
-            Section("Mail and Messages") {
-                Text("macOS keeps mail and messages locked away from every app until you say otherwise. Scout reads them on this Mac only, and sends nothing anywhere.")
-                    .font(.callout)
-                Button("Open Full Disk Access") {
-                    open("x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles")
+                HStack {
+                    Spacer()
+                    Button("Check again") { center.refresh() }
+                        .buttonStyle(.link)
+                        .font(.system(size: 12))
                 }
+                .padding(.top, 2)
             }
+            .padding(18)
         }
-        .formStyle(.grouped)
-        .onAppear { spotlightOwnsCommandSpace = SpotlightShortcut.isEnabled }
+        .onAppear { center.refresh() }
+        .onReceive(heartbeat) { _ in center.refresh() }
+    }
+}
+
+private struct PermissionRow: View {
+
+    let permission: Permission
+    let busy: Bool
+    let action: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: permission.symbol)
+                .font(.system(size: 15))
+                .foregroundStyle(permission.state.isGranted ? Color.green : .secondary)
+                .frame(width: 22, height: 22)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(permission.title)
+                        .font(.system(size: 13.5, weight: .medium))
+                    StatusPill(state: permission.state)
+                }
+
+                Text(permission.purpose)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let granted = permission.grantedOn {
+                    Text("Allowed \(granted.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            Button(action: action) {
+                if busy {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text(permission.buttonTitle)
+                }
+            }
+            .disabled(busy)
+            .frame(minWidth: 108)
+        }
+        .padding(14)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(permission.state.isGranted ? Color.green.opacity(0.35) : Color.primary.opacity(0.08))
+        )
+    }
+}
+
+private struct StatusPill: View {
+
+    let state: Permission.State
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: symbol).font(.system(size: 9, weight: .bold))
+            Text(label).font(.system(size: 10.5, weight: .semibold))
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(tint.opacity(0.16), in: Capsule())
+        .foregroundStyle(tint)
     }
 
-    private func open(_ string: String) {
-        guard let url = URL(string: string) else { return }
-        NSWorkspace.shared.open(url)
+    private var label: String {
+        switch state {
+        case .granted: "ALLOWED"
+        case .notGranted: "NOT ALLOWED"
+        case .notAsked: "NOT ASKED YET"
+        }
+    }
+
+    private var symbol: String {
+        switch state {
+        case .granted: "checkmark"
+        case .notGranted: "xmark"
+        case .notAsked: "questionmark"
+        }
+    }
+
+    private var tint: Color {
+        switch state {
+        case .granted: .green
+        case .notGranted: .orange
+        case .notAsked: .secondary
+        }
     }
 }
