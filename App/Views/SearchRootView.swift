@@ -276,26 +276,27 @@ struct SearchRootView: View {
 
             // Only while the shortcut is still Spotlight's. Once it isn't, this disappears
             // rather than becoming a button that does nothing useful.
-            if model.spotlightOwnsCommandSpace {
-                Button {
-                    model.openSpotlightShortcutSettings()
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 9.5))
-                        Text("⌘-Space still opens Spotlight")
-                        Text("Fix")
-                            .fontWeight(.semibold)
-                            .underline()
+            if model.showsCommandSpaceHint {
+                HStack(spacing: 6) {
+                    Text("⌘-Space opens Spotlight")
+                    Button("Hand it to Scout") { model.openSpotlightShortcutSettings() }
+                        .buttonStyle(.plain)
+                        .fontWeight(.semibold)
+                        .underline()
+                        .help("Opens Keyboard settings. Click \u{201C}Keyboard Shortcuts\u{2026}\u{201D}, choose Spotlight on the left, untick \u{201C}Show Spotlight search\u{201D}.")
+                    Button {
+                        model.dismissCommandSpaceHint()
+                    } label: {
+                        Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
                     }
-                    .font(.system(size: 11.5))
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 3)
-                    .background(Color.orange.opacity(0.15), in: Capsule())
-                    .foregroundStyle(.orange)
+                    .buttonStyle(.plain)
+                    .help("Stop offering. \u{2325}-Space keeps working.")
                 }
-                .buttonStyle(.plain)
-                .help("Opens Keyboard Shortcuts, where you untick “Show Spotlight search”")
+                .font(.system(size: 11.5))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 3)
+                .background(Color.primary.opacity(0.07), in: Capsule())
+                .foregroundStyle(.secondary)
             }
 
             Button {

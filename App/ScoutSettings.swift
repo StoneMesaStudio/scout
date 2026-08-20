@@ -31,6 +31,7 @@ final class ScoutSettings {
         let saved = store.stringArray(forKey: Key.enabledLanes)?.compactMap(SearchLane.init(rawValue:))
         enabledLanes = Set(saved ?? [.files, .contacts, .mail, .messages, .apps])
         hasSeenWelcome = store.bool(forKey: Key.hasSeenWelcome)
+        hideCommandSpaceHint = store.bool(forKey: Key.hideCommandSpaceHint)
 
         if let saved = store.string(forKey: Key.panelFrame) {
             let rect = NSRectFromString(saved)
@@ -50,6 +51,7 @@ final class ScoutSettings {
         static let enabledLanes = "enabledLanes"
         static let hasSeenWelcome = "hasSeenWelcome"
         static let panelFrame = "panelFrame"
+        static let hideCommandSpaceHint = "hideCommandSpaceHint"
     }
 
     /// Which scope the panel opens on.
@@ -86,6 +88,12 @@ final class ScoutSettings {
 
     var hasSeenWelcome: Bool {
         didSet { store.set(hasSeenWelcome, forKey: Key.hasSeenWelcome) }
+    }
+
+    /// Dismisses the footer's offer to hand ⌘-Space over. ⌥-Space is a perfectly good shortcut,
+    /// and a permanent nag about a choice already made is just noise.
+    var hideCommandSpaceHint: Bool {
+        didSet { store.set(hideCommandSpaceHint, forKey: Key.hideCommandSpaceHint) }
     }
 
     /// Where the panel was left, in size and position. Nil until it has been moved or resized

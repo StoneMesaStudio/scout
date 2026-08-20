@@ -130,7 +130,7 @@ final class PermissionCenter {
             id: "commandSpace",
             title: "The ⌘-Space shortcut",
             purpose: taken
-                ? "Spotlight still has it, so Scout is staying off it — claiming it too would open both at once. Untick “Show Spotlight search” under Spotlight and Scout picks it up within seconds. ⌥-Space works meanwhile."
+                ? "⌥-Space works either way. To hand over ⌘-Space too: Keyboard Shortcuts… › Spotlight › untick “Show Spotlight search”. Scout stays off that shortcut until then, because claiming it too would open both at once."
                 : "⌘-Space opens Scout. ⌥-Space works too.",
             symbol: "command",
             state: taken ? .notGranted : .granted,

@@ -110,6 +110,15 @@ final class SearchModel {
     /// so the offer to fix it disappears as soon as it is fixed.
     private(set) var spotlightOwnsCommandSpace = SpotlightShortcut.isEnabled
 
+    /// Whether to offer the swap in the footer at all.
+    var showsCommandSpaceHint: Bool {
+        spotlightOwnsCommandSpace && !settings.hideCommandSpaceHint
+    }
+
+    func dismissCommandSpaceHint() {
+        settings.hideCommandSpaceHint = true
+    }
+
     var hasChips: Bool {
         enabledLanes.contains(.files) && (!pinnedPlaces.isEmpty || !suggestions.isEmpty)
     }
