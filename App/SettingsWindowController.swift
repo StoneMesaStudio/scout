@@ -10,11 +10,19 @@ import SwiftUI
 final class SettingsWindowController {
 
     static let openNotification = Notification.Name("ScoutOpenSettings")
+    /// Which page to open, and optionally a permission to ask about on arrival.
+    static let tabKey = "tab"
+    static let requestKey = "request"
 
     private var window: NSWindow?
 
-    func show() {
+    func show(tab: SettingsView.Tab = .general, requesting permission: String? = nil) {
+        let root = SettingsView(initialTab: tab, requestOnAppear: permission)
+
         if let window {
+            // Replacing the root view is what makes a second visit able to land on a different
+            // page, rather than wherever the window was left.
+            window.contentView = NSHostingView(rootView: root)
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
             return
@@ -29,7 +37,7 @@ final class SettingsWindowController {
         window.title = "Scout Settings"
         window.isReleasedWhenClosed = false
         window.center()
-        window.contentView = NSHostingView(rootView: SettingsView())
+        window.contentView = NSHostingView(rootView: root)
 
         self.window = window
         NSApp.activate(ignoringOtherApps: true)

@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import Contacts
 import SwiftUI
 import ScoutCore
 
@@ -25,6 +26,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             refreshHotKeys()
             report += "Scout has claimed ⌘-Space: \(HotKeyCenter.shared.isRegistered(Self.commandSpace) ? "yes" : "no")\n"
             report += "Scout has claimed ⌥-Space: \(HotKeyCenter.shared.isRegistered(Self.optionSpace) ? "yes" : "no")\n"
+            report += "\nCONTACTS\n--------\n"
+            report += "authorization status: \(CNContactStore.authorizationStatus(for: .contacts).rawValue)"
+            report += "  (0 = never asked, 2 = denied, 3 = allowed, 4 = limited)\n"
             try? report.write(to: destination, atomically: true, encoding: .utf8)
             NSApp.terminate(nil)
             return
@@ -51,8 +55,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             forName: SettingsWindowController.openNotification,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.settingsWindow.show() }
+        ) { [weak self] note in
+            // Read out of the notification before the actor hop: a Notification is not Sendable,
+            // but the two values inside it are.
+            let tab = note.userInfo?[SettingsWindowController.tabKey] as? SettingsView.Tab ?? .general
+            let request = note.userInfo?[SettingsWindowController.requestKey] as? String
+            MainActor.assumeIsolated {
+                self?.settingsWindow.show(tab: tab, requesting: request)
+            }
         }
 
         // First run: nothing about a menu-bar app with no Dock icon tells a new user it started,

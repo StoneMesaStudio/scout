@@ -249,11 +249,26 @@ final class SearchModel {
         rebuildSections()
     }
 
-    /// Raise the system's own Contacts prompt, then search again with the answer.
+    /// Raise the system's own Contacts prompt.
+    ///
+    /// The panel goes away first, and that is not politeness. It floats above ordinary windows,
+    /// and macOS presents its permission prompt in an ordinary one — so with the panel up, the
+    /// prompt appears behind it and nothing seems to happen at all.
     func requestContactsAccess() {
-        Task { [contacts] in
-            _ = await contacts.requestAccess()
-            self.runSearch()
+        onDismiss?()
+        // Routed through the Settings window rather than asked from here. The panel floats above
+        // ordinary windows and macOS draws its permission prompt in an ordinary one, so asking
+        // with the panel up put the prompt behind it — nothing appeared to happen at all. The
+        // settings window is an ordinary window, and it is also where the answer is shown.
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: SettingsWindowController.openNotification,
+                object: nil,
+                userInfo: [
+                    SettingsWindowController.tabKey: SettingsView.Tab.permissions,
+                    SettingsWindowController.requestKey: "contacts",
+                ]
+            )
         }
     }
 

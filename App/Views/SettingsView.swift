@@ -4,18 +4,33 @@ import ScoutCore
 
 struct SettingsView: View {
 
+    enum Tab: Hashable, Sendable {
+        case general, places, permissions
+    }
+
+    /// When something else opens Settings to make a particular point — a permission that needs
+    /// granting — it says which page to land on.
+    var initialTab: Tab = .general
+    /// Ask the Permissions page to raise a prompt as soon as it appears.
+    var requestOnAppear: String?
+
     @State private var settings = ScoutSettings.shared
+    @State private var tab: Tab = .general
 
     var body: some View {
-        TabView {
+        TabView(selection: $tab) {
             GeneralSettings(settings: settings)
                 .tabItem { Label("General", systemImage: "gearshape") }
+                .tag(Tab.general)
             PlacesSettings(settings: settings)
                 .tabItem { Label("Places", systemImage: "folder") }
-            PermissionSettings()
+                .tag(Tab.places)
+            PermissionSettings(requestOnAppear: requestOnAppear)
                 .tabItem { Label("Permissions", systemImage: "lock") }
+                .tag(Tab.permissions)
         }
         .frame(width: 580, height: 470)
+        .onAppear { tab = initialTab }
     }
 }
 
@@ -177,8 +192,12 @@ private struct FolderList: View {
 /// back is enough — there is nothing to press afterwards to make it notice.
 private struct PermissionSettings: View {
 
+    /// The id of a permission to ask about the moment this page appears.
+    var requestOnAppear: String?
+
     @State private var center = PermissionCenter()
     @State private var busy: String?
+    @State private var hasAutoRequested = false
 
     /// macOS gives no notification when a permission changes, so the only way to keep up with a
     /// trip to System Settings is to look again periodically.
@@ -212,7 +231,18 @@ private struct PermissionSettings: View {
             }
             .padding(18)
         }
-        .onAppear { center.refresh() }
+        .onAppear {
+            center.refresh()
+            guard !hasAutoRequested, let requestOnAppear,
+                  let permission = center.permissions.first(where: { $0.id == requestOnAppear })
+            else { return }
+            hasAutoRequested = true
+            busy = permission.id
+            Task {
+                await center.act(on: permission)
+                busy = nil
+            }
+        }
         .onReceive(heartbeat) { _ in center.refresh() }
     }
 }
