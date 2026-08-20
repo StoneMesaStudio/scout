@@ -106,6 +106,10 @@ final class SearchModel {
 
     var pinnedPlaces: [URL] { settings.pinnedPlaces }
 
+    /// Whether macOS is still handing ⌘-Space to Spotlight. Re-read each time the panel opens,
+    /// so the offer to fix it disappears as soon as it is fixed.
+    private(set) var spotlightOwnsCommandSpace = SpotlightShortcut.isEnabled
+
     var hasChips: Bool {
         enabledLanes.contains(.files) && (!pinnedPlaces.isEmpty || !suggestions.isEmpty)
     }
@@ -155,6 +159,7 @@ final class SearchModel {
     // MARK: - Lifecycle
 
     func reset() {
+        spotlightOwnsCommandSpace = SpotlightShortcut.isEnabled
         text = ""
         scope = settings.defaultScope
         focusedFolder = nil
@@ -419,5 +424,26 @@ final class SearchModel {
 
     func toggleScope() {
         scope = scope == .myFiles ? .wholeMac : .myFiles
+    }
+
+    /// Open Scout's own settings. The panel gets out of the way first — a floating panel over a
+    /// settings window is nobody's idea of helpful.
+    func openSettings() {
+        onDismiss?()
+        // A turn later: dismissing hides Scout, and asking a hidden app to show a window in the
+        // same breath is a race the window loses.
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        }
+    }
+
+    /// Open the System Settings page holding the Spotlight shortcut. The `?Shortcuts` anchor
+    /// lands on Keyboard Shortcuts where macOS honours it, and on the Keyboard pane where it
+    /// does not — either way, one step from the checkbox.
+    func openSpotlightShortcutSettings() {
+        onDismiss?()
+        let url = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension?Shortcuts")
+        if let url { NSWorkspace.shared.open(url) }
     }
 }

@@ -271,7 +271,50 @@ struct SearchRootView: View {
             KeyHint("⌘return", "Reveal in Finder")
             KeyHint("tab", "Search inside folder")
             KeyHint("⌘1–6", "Sources")
+
             Spacer()
+
+            // Only while the shortcut is still Spotlight's. Once it isn't, this disappears
+            // rather than becoming a button that does nothing useful.
+            if model.spotlightOwnsCommandSpace {
+                Button {
+                    model.openSpotlightShortcutSettings()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 9.5))
+                        Text("⌘-Space still opens Spotlight")
+                        Text("Fix")
+                            .fontWeight(.semibold)
+                            .underline()
+                    }
+                    .font(.system(size: 11.5))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 3)
+                    .background(Color.orange.opacity(0.15), in: Capsule())
+                    .foregroundStyle(.orange)
+                }
+                .buttonStyle(.plain)
+                .help("Opens Keyboard Shortcuts, where you untick “Show Spotlight search”")
+            }
+
+            Button {
+                model.openSettings()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 11))
+                    Text("Settings")
+                }
+                .font(.system(size: 11.5))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 3)
+                .background(Color.primary.opacity(0.07), in: Capsule())
+                .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Scout's settings, including permissions")
+
             KeyHint("esc", "Dismiss")
         }
         .padding(.horizontal, 18)
