@@ -69,34 +69,23 @@ public struct ContactSearcher: Sendable {
         ]
     }
 
-    /// Search names, then email addresses, then phone numbers — the three ways anyone looks
-    /// someone up. Apple's contact predicates only take one of those at a time, so all three run
-    /// and the results are merged.
-    public func search(_ query: String, limit: Int = 30) -> [ContactHit] {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 2, access == .allowed else { return [] }
+    /// Every contact, as a list we can search ourselves.
+    ///
+    /// Apple's own `predicateForContacts(matchingName:)` was the obvious route and it is wrong in
+    /// both directions: searching "Jose" returned Joan, John and Joyce — it matches names that
+    /// merely sound or start alike — while missing "Hernandez Jose" and "Sabutis Joseph"
+    /// altogether. Reading the contacts once and matching them here is both correct and faster,
+    /// and it is the same principle as the rest of Scout: own the matching.
+    public func loadAll() -> [ContactHit] {
+        guard access == .allowed else { return [] }
 
-        let store = CNContactStore()
-        var predicates: [NSPredicate] = [CNContact.predicateForContacts(matchingName: trimmed)]
+        let request = CNContactFetchRequest(keysToFetch: Self.keysToFetch())
+        request.unifyResults = true
+        request.sortOrder = .givenName
 
-        if trimmed.contains("@") {
-            predicates.append(CNContact.predicateForContacts(matchingEmailAddress: trimmed))
-        }
-        // Only bother with the phone predicate when the query looks like a number.
-        if trimmed.contains(where: \.isNumber), !trimmed.contains(where: { $0.isLetter }) {
-            let number = CNPhoneNumber(stringValue: trimmed)
-            predicates.append(CNContact.predicateForContacts(matching: number))
-        }
-
-        var seen: Set<String> = []
         var hits: [ContactHit] = []
-
-        for predicate in predicates {
-            let found = (try? store.unifiedContacts(matching: predicate, keysToFetch: Self.keysToFetch())) ?? []
-            for contact in found where seen.insert(contact.identifier).inserted {
-                hits.append(Self.hit(from: contact))
-                if hits.count >= limit { return hits }
-            }
+        try? CNContactStore().enumerateContacts(with: request) { contact, _ in
+            hits.append(Self.hit(from: contact))
         }
         return hits
     }

@@ -22,7 +22,7 @@ struct SearchRootView: View {
             // The results area always claims the space left over, so the panel keeps its shape
             // whether it is showing sixty rows, none, or nothing typed yet.
             Group {
-                if !model.sections.isEmpty {
+                if !model.displayItems.isEmpty {
                     results
                 } else if !model.text.isEmpty {
                     emptyState
@@ -150,17 +150,31 @@ struct SearchRootView: View {
     private var results: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2, pinnedViews: [.sectionHeaders]) {
-                    ForEach(model.sections) { section in
-                        Section {
-                            sectionBody(section)
-                        } header: {
-                            SectionHeader(lane: section.lane, count: section.rows.count)
-                        }
-                    }
+                // One list, one walk. Headers and rows are interleaved by the model so a heading
+                // cannot end up drawn above another section's results.
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(model.displayItems) { item in
+                        switch item {
+                        case .header(let lane, let count):
+                            SectionHeader(lane: lane, count: count)
 
-                    if model.enabledLanes.contains(.files), model.hiddenCount > 0 {
-                        hiddenNotice
+                        case .status(let lane, let status):
+                            LaneStatusView(status: status, lane: lane) {
+                                model.requestContactsAccess()
+                            }
+
+                        case .row(let row, let index):
+                            PanelRowView(row: row, selected: model.selection == index)
+                                .id(index)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    model.selection = index
+                                    model.activate()
+                                }
+
+                        case .hiddenNotice:
+                            hiddenNotice
+                        }
                     }
                 }
                 .padding(8)
@@ -168,27 +182,6 @@ struct SearchRootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onChange(of: model.selection) { _, new in
                 withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(new, anchor: .center) }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func sectionBody(_ section: PanelSection) -> some View {
-        if section.status != .ready {
-            LaneStatusView(status: section.status, lane: section.lane) {
-                model.requestContactsAccess()
-            }
-        } else {
-            let start = model.startIndex(of: section)
-            ForEach(Array(section.rows.enumerated()), id: \.element.id) { offset, row in
-                let index = start + offset
-                PanelRowView(row: row, selected: model.selection == index)
-                    .id(index)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        model.selection = index
-                        model.activate()
-                    }
             }
         }
     }

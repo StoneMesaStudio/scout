@@ -38,6 +38,24 @@ enum LaneStatus: Equatable {
     case failed(String)
 }
 
+/// One line of the panel as drawn: a heading, an explanation, a result, or the note about what
+/// was left out.
+enum PanelItem: Identifiable {
+    case header(lane: SearchLane, count: Int)
+    case status(lane: SearchLane, status: LaneStatus)
+    case row(PanelRow, index: Int)
+    case hiddenNotice(count: Int)
+
+    var id: String {
+        switch self {
+        case .header(let lane, _): "header:\(lane.rawValue)"
+        case .status(let lane, _): "status:\(lane.rawValue)"
+        case .row(let row, let index): "row:\(index):\(row.id)"
+        case .hiddenNotice: "hidden"
+        }
+    }
+}
+
 /// One labelled group of results. Sources stay in their own sections rather than interleaving,
 /// so turning four of them on still reads as four answers instead of one pile.
 struct PanelSection: Identifiable {
@@ -82,6 +100,8 @@ final class SearchModel {
     var focusedFolderName: String? { focusedFolder?.lastPathComponent }
 
     private(set) var sections: [PanelSection] = []
+    /// Exactly what the panel draws, in order.
+    private(set) var displayItems: [PanelItem] = []
     /// How many file matches the exclusions removed, so nothing disappears without a trace.
     private(set) var hiddenCount: Int = 0
 
@@ -131,7 +151,9 @@ final class SearchModel {
     private let searcher = SpotlightSearcher()
     private let mail = MailSearchService()
     private let messages = MessageSearchService()
-    private let contacts = ContactSearcher()
+    private let contacts = ContactSearchService()
+    /// The authorization check is a plain static read, so it stays synchronous.
+    private let contactAccess = ContactSearcher()
     private let ranker = Ranker()
     private let appIndex = AppIndex.scan()
     private let paneIndex = SettingsPaneIndex.scan()
@@ -150,6 +172,7 @@ final class SearchModel {
     private var debounce: Task<Void, Never>?
     private var messageTask: Task<Void, Never>?
     private var mailTask: Task<Void, Never>?
+    private var contactTask: Task<Void, Never>?
 
     /// Per-section caps. Files get the room; the rest are there to answer, not to fill the panel.
     private let fileLimit = 25
@@ -189,6 +212,7 @@ final class SearchModel {
         debounce?.cancel()
         messageTask?.cancel()
         mailTask?.cancel()
+        contactTask?.cancel()
         searcher.stop()
     }
 
@@ -209,6 +233,7 @@ final class SearchModel {
         searcher.stop()
         mailTask?.cancel()
         messageTask?.cancel()
+        contactTask?.cancel()
         clearResults()
 
         let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -222,10 +247,10 @@ final class SearchModel {
         }
 
         if enabledLanes.contains(.contacts) {
-            switch contacts.access {
+            switch contactAccess.access {
             case .allowed:
                 contactStatus = .ready
-                contactRows = contacts.search(query, limit: sideLimit).map { .contact($0) }
+                if query.count >= 2 { searchContacts(query) }
             case .notRequested:
                 // Deliberately not asked here. A permission prompt that appears by itself while
                 // someone is typing is one people dismiss without reading; the notice offers a
@@ -254,6 +279,7 @@ final class SearchModel {
         // ordinary windows and macOS draws its permission prompt in an ordinary one, so asking
         // with the panel up put the prompt behind it — nothing appeared to happen at all. The
         // settings window is an ordinary window, and it is also where the answer is shown.
+        Task { [contacts] in await contacts.invalidate() }
         DispatchQueue.main.async {
             NotificationCenter.default.post(
                 name: SettingsWindowController.openNotification,
@@ -263,6 +289,17 @@ final class SearchModel {
                     SettingsWindowController.requestKey: "contacts",
                 ]
             )
+        }
+    }
+
+    /// Reading every contact takes long enough to be worth keeping off the main thread, and it
+    /// only happens once every few minutes.
+    private func searchContacts(_ query: String) {
+        contactTask = Task { [contacts, sideLimit] in
+            let hits = await contacts.search(query, limit: sideLimit)
+            guard !Task.isCancelled, query == self.text.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+            self.contactRows = hits.map { .contact($0) }
+            self.rebuildSections()
         }
     }
 
@@ -338,7 +375,34 @@ final class SearchModel {
 
         // A section with neither results nor anything to say is not worth a heading.
         sections = built.filter { !$0.rows.isEmpty || $0.status != .ready }
+        rebuildDisplayItems()
         selection = min(selection, max(0, rowCount - 1))
+    }
+
+    /// Flatten the sections into the exact sequence the panel draws.
+    ///
+    /// Built here rather than assembled in the view, because a header and its rows have to come
+    /// from one walk of the same list — computing each section's starting offset separately is how
+    /// headers ended up sitting over other sections' results.
+    private func rebuildDisplayItems() {
+        var items: [PanelItem] = []
+        var index = 0
+
+        for section in sections {
+            items.append(.header(lane: section.lane, count: section.rows.count))
+            if section.status != .ready {
+                items.append(.status(lane: section.lane, status: section.status))
+            }
+            for row in section.rows {
+                items.append(.row(row, index: index))
+                index += 1
+            }
+        }
+
+        if enabledLanes.contains(.files), hiddenCount > 0 {
+            items.append(.hiddenNotice(count: hiddenCount))
+        }
+        displayItems = items
     }
 
     private func fileRows() -> [PanelRow] {

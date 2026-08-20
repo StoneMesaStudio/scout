@@ -203,3 +203,64 @@ private func folder(_ path: String, modified: Date? = nil) -> SearchResult {
         #expect(!SearchLane.mail.hasScopes)
     }
 }
+
+@Suite struct ContactIndexTests {
+
+    private func contact(_ name: String, organization: String? = nil, phone: String? = nil, email: String? = nil) -> ContactHit {
+        ContactHit(identifier: name, name: name, organization: organization, phone: phone, email: email)
+    }
+
+    private var index: ContactIndex {
+        ContactIndex(contacts: [
+            contact("Hernandez Jose", organization: "EFR 112 EMT-B"),
+            contact("Sabutis Joseph"),
+            contact("Joseph 72 Colinas", phone: "1 (505) 652-2909"),
+            contact("Johnson Derek", organization: "Presbyterian general Surgery"),
+            contact("Joyce David"),
+            contact("Bauer Joan", email: "bauerjoan@mac.com"),
+            contact("JLC Plumbing", email: "jose@jlcplumbing.com"),
+        ])
+    }
+
+    @Test func onlyNamesThatActuallyContainTheQueryComeBack() {
+        // Apple's own name predicate returned Joan, John and Joyce for "Jose" — it matches names
+        // that merely sound alike — while missing the actual Joses.
+        let names = index.search("Jose").map(\.name)
+        #expect(names.contains("Hernandez Jose"))
+        #expect(names.contains("Sabutis Joseph"))
+        #expect(!names.contains("Bauer Joan"))
+        #expect(!names.contains("Johnson Derek"))
+        #expect(!names.contains("Joyce David"))
+    }
+
+    @Test func namesLeadOverEverythingElse() {
+        // Both Joses match a whole word of their name, so they tie and sort by name — either
+        // order is right, but they both belong above a company or an address match.
+        let top = index.search("Jose").prefix(2).map(\.name)
+        #expect(top.contains("Hernandez Jose"))
+        #expect(top.contains("Joseph 72 Colinas"))
+    }
+
+    @Test func anEmailAddressCountsButRanksBelowANameOrCompany() {
+        // JLC Plumbing only matches through its address, so it comes last.
+        #expect(index.search("Jose").map(\.name).last == "JLC Plumbing")
+    }
+
+    @Test func aCompanyIsSearchableToo() {
+        #expect(index.search("presbyterian").map(\.name) == ["Johnson Derek"])
+    }
+
+    @Test func partOfAPhoneNumberFindsThePerson() {
+        // Typed without punctuation, the way anyone would remember the last few digits.
+        #expect(index.search("6522909").map(\.name) == ["Joseph 72 Colinas"])
+    }
+
+    @Test func oneLetterIsNotASearch() {
+        #expect(index.search("J").isEmpty)
+    }
+
+    @Test func accentsAndCaseDoNotMatter() {
+        let index = ContactIndex(contacts: [contact("José Ramírez")])
+        #expect(index.search("jose").count == 1)
+    }
+}

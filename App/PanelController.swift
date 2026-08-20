@@ -55,7 +55,27 @@ final class PanelController {
             "tallest child of content view: \(Int(tallest))",
             "rows in model: \(model.rowCount)",
             "sections: \(sections)",
+            "drawn: " + model.displayItems.map(Self.label).joined(separator: " | "),
         ].joined(separator: "\n")
+    }
+
+    /// A compact description of what the panel is drawing, in order — the only way to see that a
+    /// heading is sitting over the right rows without looking at the screen.
+    private static func label(_ item: PanelItem) -> String {
+        switch item {
+        case .header(let lane, let count): "[\(lane.title) \(count)]"
+        case .status(let lane, _): "(\(lane.title): notice)"
+        case .row(let row, _):
+            switch row {
+            case .app: "app"
+            case .file: "file"
+            case .pane: "pane"
+            case .mail: "mail"
+            case .message: "msg"
+            case .contact: "contact"
+            }
+        case .hiddenNotice: "(hidden)"
+        }
     }
 
     func toggle() {
