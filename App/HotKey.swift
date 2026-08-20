@@ -14,15 +14,33 @@ final class HotKeyCenter {
 
     private var actions: [UInt32: () -> Void] = [:]
     private var refs: [UInt32: EventHotKeyRef] = [:]
+    /// Registrations are named so one can be replaced or dropped without disturbing the others.
+    private var idsByName: [String: UInt32] = [:]
     private var nextID: UInt32 = 1
     private var handlerInstalled = false
 
     private init() {}
 
-    /// Claim a shortcut. Returns false if the system refused it — usually because another app
-    /// already owns it.
+    var registeredNames: Set<String> { Set(idsByName.keys) }
+
+    func isRegistered(_ name: String) -> Bool {
+        idsByName[name] != nil
+    }
+
+    /// Claim a shortcut under a name. Registering a name that is already claimed does nothing, so
+    /// this is safe to call repeatedly.
+    ///
+    /// Returns false if the system refused it — though note that macOS happily hands the *same*
+    /// shortcut to two apps, which is a thing this app has to be careful about rather than
+    /// something it can detect here.
     @discardableResult
-    func register(keyCode: UInt32, modifiers: UInt32, action: @escaping () -> Void) -> Bool {
+    func register(
+        name: String,
+        keyCode: UInt32,
+        modifiers: UInt32,
+        action: @escaping () -> Void
+    ) -> Bool {
+        guard !isRegistered(name) else { return true }
         installHandlerIfNeeded()
 
         let id = nextID
@@ -37,13 +55,22 @@ final class HotKeyCenter {
 
         refs[id] = ref
         actions[id] = action
+        idsByName[name] = id
         return true
+    }
+
+    /// Give a shortcut back to the system.
+    func unregister(_ name: String) {
+        guard let id = idsByName.removeValue(forKey: name) else { return }
+        if let ref = refs.removeValue(forKey: id) { UnregisterEventHotKey(ref) }
+        actions[id] = nil
     }
 
     func unregisterAll() {
         for ref in refs.values { UnregisterEventHotKey(ref) }
         refs.removeAll()
         actions.removeAll()
+        idsByName.removeAll()
     }
 
     fileprivate func fire(id: UInt32) {

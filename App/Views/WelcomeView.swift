@@ -29,7 +29,7 @@ struct WelcomeView: View {
             Step(
                 number: 1,
                 title: "Give ⌘-Space to Scout",
-                detail: "macOS hands ⌘-Space to Spotlight until you say otherwise. In Keyboard Shortcuts, choose Spotlight and untick “Show Spotlight search”.",
+                detail: "macOS hands ⌘-Space to Spotlight until you say otherwise. In Keyboard Shortcuts, choose Spotlight and untick “Show Spotlight search”. Scout leaves the shortcut alone until then — otherwise one press would open both — and takes it over on its own the moment you do.",
                 button: "Open Keyboard Shortcuts",
                 url: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension"
             )
