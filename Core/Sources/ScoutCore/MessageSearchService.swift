@@ -18,6 +18,7 @@ public actor MessageSearchService {
     private let index: MessageIndex
     private var state: State = .idle
     private var lastSync: Date?
+    private var hasRebuilt = false
 
     /// How stale the index is allowed to get before opening the lane tops it up again. Syncing is
     /// incremental, so this is cheap — it exists only to avoid re-reading on every keystroke.
@@ -55,7 +56,21 @@ public actor MessageSearchService {
         } catch let failure as MessageIndex.Failure {
             state = failure == .notAccessible ? .needsFullDiskAccess : .failed(failure.description)
         } catch {
-            state = .failed(error.localizedDescription)
+            // The index is ours and rebuildable from the source, so a damaged one is worth
+            // throwing away rather than reporting. Once per launch, so a real fault still
+            // surfaces instead of looping.
+            guard !hasRebuilt else {
+                state = .failed(error.localizedDescription)
+                return
+            }
+            hasRebuilt = true
+            do {
+                try index.rebuild()
+                state = .ready
+                lastSync = now
+            } catch {
+                state = .failed(error.localizedDescription)
+            }
         }
     }
 

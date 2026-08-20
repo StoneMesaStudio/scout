@@ -86,7 +86,7 @@ public final class MailIndex {
               AND (s.subject LIKE ?1 ESCAPE '\\'
                    OR a.comment LIKE ?1 ESCAPE '\\'
                    OR a.address LIKE ?1 ESCAPE '\\')
-            ORDER BY m.date_received DESC
+            ORDER BY \(Self.trashLastClause) ASC, m.date_received DESC
             LIMIT ?2
         """)
         statement.bind(pattern, at: 1)
@@ -116,6 +116,17 @@ public final class MailIndex {
             isUnread: !statement.bool(8)
         )
     }
+
+    /// Mail found in the trash or in junk sorts below everything else.
+    ///
+    /// Not excluded: plenty of people delete a message and still want to find it later. But a
+    /// mailbox full of things already thrown away should not be the first answer, which is what
+    /// pure date order produced.
+    static let trashLastClause = """
+        CASE WHEN b.url LIKE '%Deleted%' OR b.url LIKE '%Trash%'
+                  OR b.url LIKE '%Junk%' OR b.url LIKE '%Spam%'
+             THEN 1 ELSE 0 END
+    """
 
     /// `%` and `_` are wildcards in SQL's LIKE, so someone searching for a literal underscore
     /// gets what they asked for rather than every message.

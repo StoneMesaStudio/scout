@@ -69,9 +69,16 @@ public final class MessageIndex {
         let rows = try read(from: chat, after: since)
         guard !rows.isEmpty else { return 0 }
 
-        try index.execute("BEGIN")
+        // IMMEDIATE takes the write lock up front rather than partway through, so a collision
+        // fails here — where it can be retried — instead of halfway through the inserts.
+        try index.execute("BEGIN IMMEDIATE")
+        var committed = false
+        // Without this, one bad row left the transaction open for the life of the connection and
+        // every later sync failed with the database locked, which is exactly what happened.
+        defer { if !committed { try? index.execute("ROLLBACK") } }
+
         let insert = try index.prepare("""
-            INSERT INTO messages(rowid, body, counterpart, chat_identifier, date, is_from_me, has_attachment)
+            INSERT OR REPLACE INTO messages(rowid, body, counterpart, chat_identifier, date, is_from_me, has_attachment)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
         """)
 
@@ -87,6 +94,7 @@ public final class MessageIndex {
             try insert.step()
         }
         try index.execute("COMMIT")
+        committed = true
 
         return rows.count
     }
@@ -218,6 +226,10 @@ public final class MessageIndex {
             LEFT JOIN chat_message_join j ON j.message_id = m.ROWID
             LEFT JOIN chat c ON c.ROWID = j.chat_id
             WHERE m.ROWID > ?1
+            -- One row per message. A message that belongs to more than one conversation comes
+            -- back once per chat through this join, and inserting the same message twice is a
+            -- constraint failure that aborts the whole sync.
+            GROUP BY m.ROWID
             ORDER BY m.ROWID ASC
         """)
         statement.bind(rowID, at: 1)

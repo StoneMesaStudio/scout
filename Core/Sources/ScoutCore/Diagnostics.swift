@@ -91,6 +91,17 @@ public enum Diagnostics {
             lines.append("MailIndex.search threw")
         }
 
+        // The Messages lane, exercised the same way.
+        let messages = MessageIndex()
+        do {
+            let added = try messages.sync()
+            let hits = try messages.search(term, limit: 40)
+            lines.append("MessageIndex.sync added: \(added)")
+            lines.append("MessageIndex.search returned: \(hits.count)")
+        } catch {
+            lines.append("MessageIndex failed: \(error)")
+        }
+
         for table in ["sender_addresses", "senders", "message_global_data", "summaries"] {
             guard let info = try? db.prepare("PRAGMA table_info(\(table))") else { continue }
             var columns: [String] = []

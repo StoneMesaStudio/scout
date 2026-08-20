@@ -7,7 +7,9 @@ import SQLite3
 /// Not `Sendable` on purpose: an SQLite connection belongs to whoever opened it.
 final class SQLiteDatabase {
 
-    enum Error: Swift.Error, CustomStringConvertible {
+    // LocalizedError as well as CustomStringConvertible: anything that reports a failure through
+    // `localizedDescription` would otherwise show "error 2" instead of what SQLite actually said.
+    enum Error: Swift.Error, CustomStringConvertible, LocalizedError {
         case open(String)
         case prepare(String)
         case step(String)
@@ -19,6 +21,8 @@ final class SQLiteDatabase {
             case .step(let m): "Could not run the statement: \(m)"
             }
         }
+
+        var errorDescription: String? { description }
     }
 
     private let handle: OpaquePointer
@@ -54,7 +58,14 @@ final class SQLiteDatabase {
             if let handle { sqlite3_close(handle) }
             throw Error.open(message)
         }
-        return SQLiteDatabase(handle: handle)
+
+        let database = SQLiteDatabase(handle: handle)
+        // Write-ahead logging lets a reader and a writer work at once, and a busy timeout makes
+        // the loser of a race wait rather than fail. Without both, two copies of Scout — or the
+        // app and a diagnostic run — collide on the index and one reports "database is locked".
+        try? database.execute("PRAGMA journal_mode=WAL")
+        sqlite3_busy_timeout(handle, 5_000)
+        return database
     }
 
     private init(handle: OpaquePointer) {

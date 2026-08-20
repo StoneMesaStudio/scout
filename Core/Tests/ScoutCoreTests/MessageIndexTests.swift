@@ -157,6 +157,23 @@ private func temporaryDirectory() -> URL {
         #expect(try index.sync() == 1)
     }
 
+    @Test func aMessageInTwoConversationsIsIndexedOnce() throws {
+        // The join multiplies rows per chat; inserting the same message twice fails the whole
+        // sync on a constraint, which is how a real 33,000-message history refused to index.
+        let directory = temporaryDirectory()
+        let source = directory.appending(path: "chat.db")
+        try makeChatDatabase(at: source, messages: [
+            (1, "service call", nil, "+1", "chat1", stamp, false),
+        ])
+        let extra = try SQLiteDatabase.openOrCreate(source)
+        try extra.execute("INSERT INTO chat (ROWID, display_name, chat_identifier) VALUES (99, '', 'chat2')")
+        try extra.execute("INSERT INTO chat_message_join (chat_id, message_id) VALUES (99, 1)")
+
+        let index = MessageIndex(source: source, location: directory.appending(path: "index.sqlite"))
+        #expect(try index.sync() == 1)
+        #expect(try index.search("service").count == 1)
+    }
+
     @Test func aMissingDatabaseReadsAsAPermissionProblem() {
         let index = MessageIndex(
             source: URL(filePath: "/nowhere/chat.db"),

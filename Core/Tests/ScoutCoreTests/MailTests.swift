@@ -188,3 +188,18 @@ private let received: Int64 = 1_770_000_000
         #expect(throws: MailIndex.Failure.self) { try index.search("anything") }
     }
 }
+
+@Suite struct MailOrderingTests {
+
+    @Test func mailInTheTrashSortsBelowMailThatIsNot() throws {
+        // Deleting something is not the same as not wanting to find it — but a folder of things
+        // already thrown away should not be the first answer either.
+        let directory = temporaryDirectory()
+        try makeEnvelopeIndex(at: directory, messages: [
+            (1, "service today", "A", "a@b.com", "imap://x/Deleted Messages", received + 86_400, "<a@b>", true, false),
+            (2, "service last week", "B", "b@b.com", "imap://x/Archive", received, "<c@d>", true, false),
+        ])
+        let hits = try MailIndex(mailDirectory: directory).search("service")
+        #expect(hits.map(\.mailbox) == ["Archive", "Deleted Messages"])
+    }
+}
