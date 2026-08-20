@@ -442,8 +442,7 @@ final class SearchModel {
         // A turn later: dismissing hides Scout, and asking a hidden app to show a window in the
         // same breath is a race the window loses.
         DispatchQueue.main.async {
-            NSApp.activate(ignoringOtherApps: true)
-            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+            NotificationCenter.default.post(name: SettingsWindowController.openNotification, object: nil)
         }
     }
 

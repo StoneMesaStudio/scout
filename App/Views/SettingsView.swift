@@ -247,6 +247,25 @@ private struct PermissionRow: View {
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                 }
+
+                // Full Disk Access is the one that cannot be prompted for, so it gets the steps
+                // spelled out rather than a button and a shrug.
+                if permission.id == "fullDisk", !permission.state.isGranted {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("1.  Click the button — it opens straight to Full Disk Access.")
+                        Text("2.  Find Scout in the list and switch it on.")
+                        Text("3.  If Scout isn’t listed, click + and pick it:")
+                        Button("Reveal Scout in Finder") {
+                            NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
+                        }
+                        .buttonStyle(.link)
+                        .font(.system(size: 11.5))
+                        .padding(.leading, 18)
+                    }
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
+                }
             }
 
             Spacer(minLength: 8)

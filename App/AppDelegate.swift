@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let panel = PanelController()
     private let welcome = WelcomeWindowController()
+    private let settingsWindow = SettingsWindowController()
     private var hotKeyWatcher: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -44,6 +45,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         installStatusItem()
         installHotKeys()
+
+        // The panel asks for Settings this way rather than reaching for the app delegate.
+        NotificationCenter.default.addObserver(
+            forName: SettingsWindowController.openNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.settingsWindow.show() }
+        }
 
         // First run: nothing about a menu-bar app with no Dock icon tells a new user it started,
         // let alone that ⌘-Space still belongs to Spotlight.
@@ -161,7 +171,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showSettings() {
-        NSApp.activate(ignoringOtherApps: true)
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        settingsWindow.show()
     }
 }
