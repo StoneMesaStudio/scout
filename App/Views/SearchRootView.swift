@@ -175,7 +175,9 @@ struct SearchRootView: View {
     @ViewBuilder
     private func sectionBody(_ section: PanelSection) -> some View {
         if section.status != .ready {
-            LaneStatusView(status: section.status, lane: section.lane)
+            LaneStatusView(status: section.status, lane: section.lane) {
+                model.requestContactsAccess()
+            }
         } else {
             let start = model.startIndex(of: section)
             ForEach(Array(section.rows.enumerated()), id: \.element.id) { offset, row in

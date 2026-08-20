@@ -30,7 +30,10 @@ enum PanelRow: Identifiable {
 enum LaneStatus: Equatable {
     case ready
     case needsFullDiskAccess
-    case needsContactsAccess
+    /// Contacts has never been asked for. Unlike Full Disk Access, this one an app *can* ask
+    /// about — so the notice offers a prompt rather than a trip to System Settings.
+    case contactsNotAsked
+    case contactsDenied
     case building
     case failed(String)
 }
@@ -230,10 +233,12 @@ final class SearchModel {
                 contactStatus = .ready
                 contactRows = contacts.search(query, limit: sideLimit).map { .contact($0) }
             case .notRequested:
-                contactStatus = .needsContactsAccess
-                askForContacts()
+                // Deliberately not asked here. A permission prompt that appears by itself while
+                // someone is typing is one people dismiss without reading; the notice offers a
+                // button instead, so the prompt arrives because they asked for it.
+                contactStatus = .contactsNotAsked
             case .denied:
-                contactStatus = .needsContactsAccess
+                contactStatus = .contactsDenied
             }
         }
 
@@ -244,12 +249,10 @@ final class SearchModel {
         rebuildSections()
     }
 
-    /// macOS shows its own prompt the first time. Asking on the first search rather than at
-    /// launch means the request arrives when it is obviously about something the user just did.
-    private func askForContacts() {
+    /// Raise the system's own Contacts prompt, then search again with the answer.
+    func requestContactsAccess() {
         Task { [contacts] in
-            let granted = await contacts.requestAccess()
-            guard granted else { return }
+            _ = await contacts.requestAccess()
             self.runSearch()
         }
     }

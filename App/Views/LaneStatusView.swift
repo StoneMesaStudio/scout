@@ -11,6 +11,8 @@ struct LaneStatusView: View {
 
     let status: LaneStatus
     let lane: SearchLane
+    /// Called when the notice can do something about the problem itself.
+    var onRequestAccess: (() -> Void)?
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -30,7 +32,12 @@ struct LaneStatusView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                if let permissionPane {
+                if status == .contactsNotAsked {
+                    Button("Allow Contacts…") { onRequestAccess?() }
+                        .buttonStyle(.link)
+                        .font(.system(size: 12))
+                        .padding(.top, 1)
+                } else if let permissionPane {
                     Button(permissionPane.title) {
                         if let url = URL(string: permissionPane.url) { NSWorkspace.shared.open(url) }
                     }
@@ -52,7 +59,7 @@ struct LaneStatusView: View {
         case .needsFullDiskAccess:
             ("Open Full Disk Access",
              "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles")
-        case .needsContactsAccess:
+        case .contactsDenied:
             ("Open Contacts permissions",
              "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Contacts")
         default:
@@ -62,7 +69,7 @@ struct LaneStatusView: View {
 
     private var symbol: String {
         switch status {
-        case .needsContactsAccess: "lock"
+        case .contactsNotAsked, .contactsDenied: "lock"
         case .needsFullDiskAccess: "lock"
         case .building: "clock"
         case .failed: "exclamationmark.triangle"
@@ -72,7 +79,7 @@ struct LaneStatusView: View {
 
     private var tint: Color {
         switch status {
-        case .needsFullDiskAccess, .needsContactsAccess, .building: .secondary
+        case .needsFullDiskAccess, .contactsNotAsked, .contactsDenied, .building: .secondary
         case .failed: .orange
         case .ready: .secondary
         }
@@ -80,8 +87,10 @@ struct LaneStatusView: View {
 
     private var headline: String {
         switch status {
-        case .needsContactsAccess:
-            "Scout can’t read your contacts yet"
+        case .contactsNotAsked:
+            "Scout hasn’t asked for your contacts yet"
+        case .contactsDenied:
+            "Scout isn’t allowed to read your contacts"
         case .needsFullDiskAccess:
             "Scout can’t read your \(lane == .mail ? "mail" : "messages") yet"
         case .building:
@@ -95,8 +104,10 @@ struct LaneStatusView: View {
 
     private var detail: String? {
         switch status {
-        case .needsContactsAccess:
-            "Allow Scout in Privacy & Security › Contacts. Nothing leaves this Mac."
+        case .contactsNotAsked:
+            "One click and macOS will ask. Nothing leaves this Mac."
+        case .contactsDenied:
+            "Turn Scout on in Privacy & Security › Contacts. Nothing leaves this Mac."
         case .needsFullDiskAccess:
             "macOS keeps mail and messages locked away until you allow it. Turn on Scout in Full Disk Access, then come back — you only do this once."
         case .building:
