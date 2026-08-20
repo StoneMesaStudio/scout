@@ -9,5 +9,12 @@
 	     Store. -->
 	<key>com.apple.security.app-sandbox</key>
 	<false/>
+
+	<!-- Required for Contacts, and the reason the Contacts prompt never appeared: with the
+	     hardened runtime on, macOS blocks the protected resources an app has not declared, and
+	     reports the block as "restricted" rather than asking the user. From the outside that is
+	     indistinguishable from the user having said no. -->
+	<key>com.apple.security.personal-information.addressbook</key>
+	<true/>
 </dict>
 </plist>

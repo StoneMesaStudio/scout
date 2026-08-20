@@ -15,21 +15,35 @@ public enum TypedStreamText {
 
     public static func extract(from data: Data) -> String? {
         let bytes = [UInt8](data)
-        guard let markerEnd = firstStringMarkerEnd(in: bytes) else { return nil }
 
+        // Try every string marker in the blob and keep the longest thing that decodes. A message
+        // can carry several — an empty one for an attribute name, the real text later — and which
+        // position holds the body varies with how the message was composed.
+        var best: String?
+        for markerEnd in stringMarkerEnds(in: bytes) {
+            guard let candidate = readString(bytes, after: markerEnd) else { continue }
+            if candidate.count > (best?.count ?? 0) { best = candidate }
+        }
+        return best
+    }
+
+    /// Between the class name and the string body sits a short run of typedstream bookkeeping.
+    /// The body begins at a length marker: `0x2B` for a one-byte length, `0x81` for a two-byte
+    /// little-endian one — and `0x2B 0x81` for the two together, which is what a long message
+    /// composed in Messages looks like.
+    private static func readString(_ bytes: [UInt8], after markerEnd: Int) -> String? {
         var cursor = markerEnd
-        // Between the class name and the string body sits a short run of typedstream bookkeeping
-        // bytes. The string itself begins at the first length marker: either 0x2B (a one-byte
-        // length follows) or a bare byte under 0x80 acting as the length.
-        while cursor < bytes.count, cursor - markerEnd < 12 {
+        while cursor < bytes.count, cursor - markerEnd < 16 {
             let byte = bytes[cursor]
 
             if byte == 0x2B, cursor + 1 < bytes.count {
-                let length = Int(bytes[cursor + 1])
-                return string(bytes, from: cursor + 2, length: length)
+                if bytes[cursor + 1] == 0x81, cursor + 3 < bytes.count {
+                    let length = Int(bytes[cursor + 2]) | (Int(bytes[cursor + 3]) << 8)
+                    return string(bytes, from: cursor + 4, length: length)
+                }
+                return string(bytes, from: cursor + 2, length: Int(bytes[cursor + 1]))
             }
 
-            // 0x81 introduces a two-byte little-endian length, used once a message passes 127 bytes.
             if byte == 0x81, cursor + 2 < bytes.count {
                 let length = Int(bytes[cursor + 1]) | (Int(bytes[cursor + 2]) << 8)
                 return string(bytes, from: cursor + 3, length: length)
@@ -40,29 +54,29 @@ public enum TypedStreamText {
         return nil
     }
 
-    /// Find the end of the first `NSString` or `NSMutableString` class name in the stream.
-    private static func firstStringMarkerEnd(in bytes: [UInt8]) -> Int? {
-        // Longest first: "NSMutableString" contains "NSString" nowhere, but searching for the
-        // shorter name first would still stop at the right place for either.
+    /// Every position just past an `NSString` or `NSMutableString` class name.
+    private static func stringMarkerEnds(in bytes: [UInt8]) -> [Int] {
+        var ends: [Int] = []
         for marker in ["NSMutableString", "NSString"] {
-            if let range = range(of: Array(marker.utf8), in: bytes) {
-                return range
-            }
+            ends.append(contentsOf: ranges(of: Array(marker.utf8), in: bytes))
         }
-        return nil
+        return ends.sorted()
     }
 
-    private static func range(of needle: [UInt8], in haystack: [UInt8]) -> Int? {
-        guard !needle.isEmpty, haystack.count >= needle.count else { return nil }
+    private static func ranges(of needle: [UInt8], in haystack: [UInt8]) -> [Int] {
+        guard !needle.isEmpty, haystack.count >= needle.count else { return [] }
+        var found: [Int] = []
         let limit = haystack.count - needle.count
         var index = 0
         while index <= limit {
             if haystack[index] == needle[0], Array(haystack[index..<index + needle.count]) == needle {
-                return index + needle.count
+                found.append(index + needle.count)
+                index += needle.count
+            } else {
+                index += 1
             }
-            index += 1
         }
-        return nil
+        return found
     }
 
     private static func string(_ bytes: [UInt8], from start: Int, length: Int) -> String? {

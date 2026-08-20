@@ -100,8 +100,8 @@ struct PanelRowView: View {
         switch row {
         case .file(let result) where result.duplicateCount > 1:
             "\(result.duplicateCount) copies"
-        case .mail(let hit) where hit.hasAttachment:
-            "attachment"
+        case .mail(let hit) where hit.isUnread:
+            "unread"
         default:
             nil
         }
@@ -127,7 +127,7 @@ struct PanelRowView: View {
             return "System Settings"
 
         case .mail(let hit):
-            var parts = hit.correspondents.prefix(2).map { $0 }
+            var parts = [hit.sender]
             if let date = hit.date {
                 parts.append(date.formatted(date: .abbreviated, time: .omitted))
             }

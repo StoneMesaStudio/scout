@@ -10,6 +10,99 @@ import Foundation
 /// It reports shapes and counts only. No subject, address or message text is ever written out.
 public enum Diagnostics {
 
+    /// Counts only — how many rows a given word would match through each candidate join. Enough
+    /// to tell a wrong query from an empty mailbox, without a single subject or address leaving
+    /// the machine.
+    public static func probe(_ term: String, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
+        var lines = ["Probe for \"\(term)\"", "===================="]
+        let mail = MailIndex(mailDirectory: MailIndex.defaultDirectory(home: home))
+
+        guard let location = mail.locateIndex() else { return "no Envelope Index found" }
+        guard let db = try? SQLiteDatabase.openReadOnly(location, immutable: true) else {
+            return "could not open the Envelope Index"
+        }
+
+        let pattern = "%\(MailIndex.escapeForLike(term))%"
+
+        func count(_ label: String, _ sql: String) {
+            guard let statement = try? db.prepare(sql) else {
+                lines.append("\(label): could not run — \(db.lastErrorMessage)")
+                return
+            }
+            statement.bind(pattern, at: 1)
+            lines.append("\(label): \((try? statement.step()) == true ? String(statement.int64(0)) : "?")")
+        }
+
+        count("subjects matching", "SELECT COUNT(*) FROM subjects WHERE subject LIKE ?1")
+        count("addresses matching (address)", "SELECT COUNT(*) FROM addresses WHERE address LIKE ?1")
+        count("addresses matching (comment/name)", "SELECT COUNT(*) FROM addresses WHERE comment LIKE ?1")
+        count("messages via subject join", """
+            SELECT COUNT(*) FROM messages m JOIN subjects s ON s.ROWID = m.subject
+            WHERE s.subject LIKE ?1
+        """)
+        count("messages via sender->addresses join", """
+            SELECT COUNT(*) FROM messages m JOIN addresses a ON a.ROWID = m.sender
+            WHERE a.address LIKE ?1 OR a.comment LIKE ?1
+        """)
+        count("messages via sender->sender_addresses->addresses", """
+            SELECT COUNT(*) FROM messages m
+            JOIN sender_addresses sa ON sa.ROWID = m.sender
+            JOIN addresses a ON a.ROWID = sa.address
+            WHERE a.address LIKE ?1 OR a.comment LIKE ?1
+        """)
+        count("messages via recipients", """
+            SELECT COUNT(*) FROM messages m
+            JOIN recipients r ON r.message = m.ROWID
+            JOIN addresses a ON a.ROWID = r.address
+            WHERE a.address LIKE ?1 OR a.comment LIKE ?1
+        """)
+
+        count("messages total", "SELECT COUNT(*) FROM messages WHERE ?1 IS NOT NULL")
+        count("messages with deleted = 0", "SELECT COUNT(*) FROM messages WHERE deleted = 0 AND ?1 IS NOT NULL")
+        count("messages with deleted IS NULL", "SELECT COUNT(*) FROM messages WHERE deleted IS NULL AND ?1 IS NOT NULL")
+        count("the exact query Scout runs", """
+            SELECT COUNT(*)
+            FROM messages m
+            LEFT JOIN subjects  s ON s.ROWID = m.subject
+            LEFT JOIN addresses a ON a.ROWID = m.sender
+            LEFT JOIN mailboxes b ON b.ROWID = m.mailbox
+            WHERE m.deleted = 0
+              AND (s.subject LIKE ?1 ESCAPE '\\'
+                   OR a.comment LIKE ?1 ESCAPE '\\'
+                   OR a.address LIKE ?1 ESCAPE '\\')
+        """)
+        count("same query without the deleted filter", """
+            SELECT COUNT(*)
+            FROM messages m
+            LEFT JOIN subjects  s ON s.ROWID = m.subject
+            LEFT JOIN addresses a ON a.ROWID = m.sender
+            WHERE (s.subject LIKE ?1 OR a.comment LIKE ?1 OR a.address LIKE ?1)
+        """)
+
+        // The real code path, not just the SQL: this is what the Mail lane actually calls.
+        if let hits = try? mail.search(term, limit: 40) {
+            lines.append("MailIndex.search returned: \(hits.count)")
+            lines.append("  with a subject: \(hits.filter { $0.subject != "(no subject)" }.count)")
+            lines.append("  with a sender name: \(hits.filter { $0.senderAddress != nil }.count)")
+            lines.append("  with a date: \(hits.filter { $0.date != nil }.count)")
+            lines.append("  with a mailbox: \(hits.filter { $0.mailbox != nil }.count)")
+            lines.append("  openable in Mail: \(hits.filter { $0.openURL != nil }.count)")
+        } else {
+            lines.append("MailIndex.search threw")
+        }
+
+        for table in ["sender_addresses", "senders", "message_global_data", "summaries"] {
+            guard let info = try? db.prepare("PRAGMA table_info(\(table))") else { continue }
+            var columns: [String] = []
+            while (try? info.step()) == true {
+                if let column = info.string(1) { columns.append(column) }
+            }
+            if !columns.isEmpty { lines.append("\(table): \(columns.joined(separator: ", "))") }
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
     public static func report(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
         var lines: [String] = []
         lines.append("Scout diagnostic")
@@ -92,7 +185,11 @@ public enum Diagnostics {
         lines.append("  tables: \(names.joined(separator: ", "))")
 
         // The handful that would carry a searchable message.
-        for table in names where ["messages", "subjects", "addresses", "mailboxes", "message"].contains(table) {
+        let interesting = [
+            "messages", "subjects", "addresses", "mailboxes", "message",
+            "searchable_messages", "senders", "recipients", "summaries",
+        ]
+        for table in names where interesting.contains(table) {
             guard let info = try? db.prepare("PRAGMA table_info(\(table))") else { continue }
             var columns: [String] = []
             while (try? info.step()) == true {

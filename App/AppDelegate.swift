@@ -38,12 +38,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // so a layout that silently collapses can be caught without anyone watching the screen.
         if let index = CommandLine.arguments.firstIndex(of: "--selftest") {
             let query = CommandLine.arguments.count > index + 1 ? CommandLine.arguments[index + 1] : "service"
-            print(panel.selfTest(query: query))
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                print("--- after the search returned ---")
-                print(self.panel.selfTestSummary())
+            // A path to write to, because launching through LaunchServices — which is the only
+            // way the app carries its own permissions — leaves nowhere for stdout to go.
+            let destination = CommandLine.arguments.count > index + 2
+                ? URL(filePath: CommandLine.arguments[index + 2])
+                : nil
+            _ = panel.selfTest(query: query)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
+                let report = self.panel.selfTestSummary()
+                if let destination {
+                    try? report.write(to: destination, atomically: true, encoding: .utf8)
+                } else {
+                    print(report)
+                }
                 NSApp.terminate(nil)
             }
+            return
+        }
+
+        if let index = CommandLine.arguments.firstIndex(of: "--probe"),
+           CommandLine.arguments.count > index + 2 {
+            let report = Diagnostics.probe(CommandLine.arguments[index + 1])
+            try? report.write(to: URL(filePath: CommandLine.arguments[index + 2]), atomically: true, encoding: .utf8)
+            NSApp.terminate(nil)
             return
         }
 

@@ -18,7 +18,7 @@ enum PanelRow: Identifiable {
         case .app(let entry, let pinned): "app:\(pinned):\(entry.url.path)"
         case .file(let result): "file:\(result.url.path)"
         case .pane(let pane): "pane:\(pane.identifier)"
-        case .mail(let hit): "mail:\(hit.url.path)"
+        case .mail(let hit): "mail:\(hit.rowID)"
         case .message(let hit): "message:\(hit.rowID)"
         case .contact(let hit): "contact:\(hit.identifier)"
         }
@@ -129,7 +129,7 @@ final class SearchModel {
     // MARK: - Machinery
 
     private let searcher = SpotlightSearcher()
-    private let mailSearcher = MailSearcher()
+    private let mail = MailSearchService()
     private let messages = MessageSearchService()
     private let contacts = ContactSearcher()
     private let ranker = Ranker()
@@ -149,6 +149,7 @@ final class SearchModel {
 
     private var debounce: Task<Void, Never>?
     private var messageTask: Task<Void, Never>?
+    private var mailTask: Task<Void, Never>?
 
     /// Per-section caps. Files get the room; the rest are there to answer, not to fill the panel.
     private let fileLimit = 25
@@ -158,12 +159,6 @@ final class SearchModel {
         searcher.onResults = { [weak self] results in
             guard let self else { return }
             self.rawFiles = results
-            self.rebuildSections()
-        }
-        mailSearcher.onResults = { [weak self] hits in
-            guard let self else { return }
-            self.mailRows = hits.prefix(self.sideLimit).map { .mail($0) }
-            self.mailStatus = .ready
             self.rebuildSections()
         }
     }
@@ -193,8 +188,8 @@ final class SearchModel {
     func stop() {
         debounce?.cancel()
         messageTask?.cancel()
+        mailTask?.cancel()
         searcher.stop()
-        mailSearcher.stop()
     }
 
     // MARK: - Searching
@@ -212,7 +207,7 @@ final class SearchModel {
     private func runSearch() {
         selection = 0
         searcher.stop()
-        mailSearcher.stop()
+        mailTask?.cancel()
         messageTask?.cancel()
         clearResults()
 
@@ -222,9 +217,8 @@ final class SearchModel {
             searcher.search(text, scope: scope, folder: focusedFolder)
         }
 
-        if enabledLanes.contains(.mail) {
-            mailStatus = mailSearcher.isIndexReadable ? .ready : .needsFullDiskAccess
-            if mailStatus == .ready { mailSearcher.search(text) }
+        if enabledLanes.contains(.mail), query.count >= 2 {
+            searchMail(query)
         }
 
         if enabledLanes.contains(.contacts) {
@@ -270,6 +264,28 @@ final class SearchModel {
                 ]
             )
         }
+    }
+
+    /// Mail's own index is read off the main thread — 46,000 messages is not something to scan
+    /// while someone is typing.
+    private func searchMail(_ query: String) {
+        mailTask = Task { [mail, sideLimit] in
+            let hits = await mail.search(query, limit: sideLimit)
+            let state = await mail.currentState()
+            guard !Task.isCancelled else { return }
+            self.applyMail(hits, state: state, query: query)
+        }
+    }
+
+    private func applyMail(_ hits: [MailHit], state: MailSearchService.State, query: String) {
+        guard query == text.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+        switch state {
+        case .needsFullDiskAccess: mailStatus = .needsFullDiskAccess
+        case .failed(let reason): mailStatus = .failed(reason)
+        case .ready: mailStatus = .ready
+        }
+        mailRows = hits.map { .mail($0) }
+        rebuildSections()
     }
 
     /// The Messages index is built and read off the main thread, so the panel keeps responding
@@ -397,7 +413,9 @@ final class SearchModel {
         case .pane(let pane):
             if let url = pane.url { NSWorkspace.shared.open(url) }
         case .mail(let hit):
-            NSWorkspace.shared.open(hit.openURL)
+            // Without a Message-ID there is nothing to open — Mail's index knows the message but
+            // not where its file is.
+            if let url = hit.openURL { NSWorkspace.shared.open(url) }
         case .contact(let hit):
             if let url = hit.openURL { NSWorkspace.shared.open(url) }
         case .message(let hit):
@@ -419,8 +437,7 @@ final class SearchModel {
         let url: URL? = switch selectedRow {
         case .app(let entry, _): entry.url
         case .file(let result): result.url
-        case .mail(let hit): hit.url
-        case .pane, .message, .contact, nil: nil
+        case .pane, .mail, .message, .contact, nil: nil
         }
         guard let url else { return }
         if let result = selectedFile { pickMemory.record(query: text, url: result.url) }
