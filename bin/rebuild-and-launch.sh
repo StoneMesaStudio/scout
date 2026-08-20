@@ -93,9 +93,42 @@ fi
 # ── 4. Launch ───────────────────────────────────────────────────────────────────────────────────
 # Through `open`, never by running the binary directly: a directly-executed binary is a different
 # thing to macOS and does not carry the app's permissions with it.
-if ! open "$APP" 2>&1; then
-    echo "Built successfully, but couldn't launch it."
-    echo "The app is at: $APP"
+#
+# Worth retrying rather than giving up. The build replaces the bundle at a path LaunchServices
+# already knows, and for a second or two afterwards `open` can answer -600 (procNotFound) — it is
+# still holding the registration for the copy that was just quit. Waiting it out fixes it; if it
+# does not, re-registering the bundle does.
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+LAUNCH_ERROR=""
+
+launch_app() {
+    LAUNCH_ERROR="$(open "$APP" 2>&1)"
+    [[ -z "$LAUNCH_ERROR" ]]
+}
+
+if ! launch_app; then
+    sleep 1
+    if ! launch_app; then
+        [[ -x "$LSREGISTER" ]] && "$LSREGISTER" -f "$APP" >/dev/null 2>&1
+        sleep 1
+        if ! launch_app; then
+            echo "Built successfully, but macOS wouldn't launch it."
+            echo
+            echo "$LAUNCH_ERROR"
+            echo
+            echo "Opening it from the Finder usually works: $APP"
+            exit 1
+        fi
+    fi
+fi
+
+# `open` returns as soon as the request is accepted, which is not the same as the app running.
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    pgrep -x Scout >/dev/null && break
+    sleep 0.3
+done
+if ! pgrep -x Scout >/dev/null; then
+    echo "macOS accepted the launch but Scout isn't running. The app is at: $APP"
     exit 1
 fi
 
