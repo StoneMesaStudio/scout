@@ -22,6 +22,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // `Scout --selftest <query>` lays the panel out offscreen and prints what it measured,
+        // so a layout that silently collapses can be caught without anyone watching the screen.
+        if let index = CommandLine.arguments.firstIndex(of: "--selftest") {
+            let query = CommandLine.arguments.count > index + 1 ? CommandLine.arguments[index + 1] : "service"
+            print(panel.selfTest(query: query))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                print("--- after the search returned ---")
+                print(self.panel.selfTestSummary())
+                NSApp.terminate(nil)
+            }
+            return
+        }
+
         installStatusItem()
         installHotKeys()
 

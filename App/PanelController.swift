@@ -15,17 +15,48 @@ final class PanelController {
 
     private var panel: SearchPanel?
     private let model = SearchModel()
-    private var resizeObserver: NSObjectProtocol?
+    private let settings = ScoutSettings.shared
+    private var frameObservers: [NSObjectProtocol] = []
 
-    /// Where the panel's top-left corner belongs. The panel grows and shrinks as results come and
-    /// go, and macOS measures windows from the bottom-left — so without pinning the top edge, the
-    /// search field would jump up the screen every time a result arrived.
-    private var anchor: NSPoint?
+    /// How much of the screen the panel takes when it has never been resized. Tall on purpose:
+    /// the results are the point, and a panel that only shows the search field looks broken.
+    private let defaultHeightFraction: CGFloat = 0.80
+    private let defaultWidth: CGFloat = 900
+    private let minimumSize = NSSize(width: 620, height: 300)
 
-    /// The proportion of the screen height the panel's top edge sits at. Slightly above centre
-    /// reads as "in front of your work" rather than "in the middle of it".
-    private let verticalPlacement: CGFloat = 0.26
-    private let panelWidth: CGFloat = 820
+    /// Bring the panel up offscreen, run a query through it, and report what the layout did.
+    /// Used by `Scout --selftest`, because "the results are drawn into a zero-height box" is a
+    /// bug no unit test catches and no one can see without the app in front of them.
+    func selfTest(query: String) -> String {
+        let panel = existingOrNewPanel()
+        panel.setFrame(NSRect(x: -6000, y: 0, width: 900, height: 800), display: false)
+        panel.orderFront(nil)
+        panel.layoutIfNeeded()
+
+        model.reset()
+        model.text = query
+        return summary(of: panel)
+    }
+
+    /// Re-measure after the search has had time to come back.
+    func selfTestSummary() -> String {
+        guard let panel else { return "no panel" }
+        panel.layoutIfNeeded()
+        return summary(of: panel)
+    }
+
+    private func summary(of panel: NSPanel) -> String {
+        let content = panel.contentView
+        let tallest = content?.subviews.map(\.frame.height).max() ?? 0
+        let sections = model.sections.map { "\($0.lane.title):\($0.rows.count)" }.joined(separator: ", ")
+        return [
+            "panel: \(Int(panel.frame.width))x\(Int(panel.frame.height))",
+            "content view: \(Int(content?.frame.width ?? 0))x\(Int(content?.frame.height ?? 0))",
+            "tallest child of content view: \(Int(tallest))",
+            "rows in model: \(model.rowCount)",
+            "sections: \(sections)",
+        ].joined(separator: "\n")
+    }
 
     func toggle() {
         if panel?.isVisible == true { hide() } else { show() }
@@ -36,7 +67,6 @@ final class PanelController {
         model.reset()
         model.onDismiss = { [weak self] in self?.hide() }
 
-        panel.layoutIfNeeded()
         position(panel)
         // Bringing the app forward is what lets the text field take key focus. Dismissing hides
         // Scout again, which hands focus straight back to the app underneath.
@@ -54,8 +84,10 @@ final class PanelController {
         if let panel { return panel }
 
         let panel = SearchPanel(
-            contentRect: NSRect(x: 0, y: 0, width: panelWidth, height: 120),
-            styleMask: [.borderless, .nonactivatingPanel],
+            contentRect: NSRect(origin: .zero, size: minimumSize),
+            // `.resizable` on a borderless window still gives working edges to drag, without
+            // adding a title bar this panel has no use for.
+            styleMask: [.borderless, .nonactivatingPanel, .resizable],
             backing: .buffered,
             defer: false
         )
@@ -63,46 +95,60 @@ final class PanelController {
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.level = .floating
-        panel.isMovable = false
+        panel.isMovable = true
+        panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = true
         panel.animationBehavior = .utilityWindow
+        panel.minSize = minimumSize
         // Follows the user between spaces and shows over full-screen apps, like Spotlight does.
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
 
-        let host = NSHostingView(rootView: SearchRootView(model: model))
-        host.sizingOptions = [.preferredContentSize]
-        panel.contentView = host
-        panel.setContentSize(host.fittingSize)
+        // No `sizingOptions` here on purpose. Letting the hosting view drive the window size is
+        // what made the results vanish: a ScrollView has no height of its own to report, so the
+        // window sized itself to the search field and the results were drawn into nothing.
+        // The window owns the size; the view fills it.
+        panel.contentView = NSHostingView(rootView: SearchRootView(model: model))
 
-        resizeObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didResizeNotification,
-            object: panel,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.reanchor() }
+        for name in [NSWindow.didResizeNotification, NSWindow.didMoveNotification] {
+            let token = NotificationCenter.default.addObserver(
+                forName: name,
+                object: panel,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.rememberFrame() }
+            }
+            frameObservers.append(token)
         }
 
         self.panel = panel
         return panel
     }
 
-    /// Put the top-left corner back where it was after the panel changed height.
-    private func reanchor() {
-        guard let panel, let anchor else { return }
-        panel.setFrameTopLeftPoint(anchor)
-    }
-
-    /// Put the panel on whichever screen the pointer is on — that is the screen the user is
-    /// looking at, which is not always the one holding the menu bar.
+    /// Put the panel where it was left, or — the first time — centred and tall on whichever screen
+    /// the pointer is on. That is the screen the user is looking at, which is not always the one
+    /// holding the menu bar.
     private func position(_ panel: NSPanel) {
         let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
-            ?? NSScreen.main
-        guard let frame = screen?.visibleFrame else { return }
+        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
+        guard let visible = screen?.visibleFrame else { return }
 
-        let x = frame.midX - panelWidth / 2
-        let top = frame.maxY - (frame.height * verticalPlacement)
-        anchor = NSPoint(x: x, y: top)
-        panel.setFrameTopLeftPoint(NSPoint(x: x, y: top))
+        if let saved = settings.panelFrame, visible.intersects(saved), saved.width >= minimumSize.width {
+            panel.setFrame(saved, display: false)
+            return
+        }
+
+        let height = min(visible.height, visible.height * defaultHeightFraction)
+        let width = min(visible.width - 80, defaultWidth)
+        let x = visible.midX - width / 2
+        // Sits slightly above centre, which reads as "in front of your work" rather than "on top
+        // of it", and leaves the menu bar clear.
+        let y = visible.maxY - (visible.height - height) / 2.5 - height
+
+        panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: false)
+    }
+
+    private func rememberFrame() {
+        guard let panel, panel.isVisible else { return }
+        settings.panelFrame = panel.frame
     }
 }

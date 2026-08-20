@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import ServiceManagement
@@ -30,6 +31,13 @@ final class ScoutSettings {
         let saved = store.stringArray(forKey: Key.enabledLanes)?.compactMap(SearchLane.init(rawValue:))
         enabledLanes = Set(saved ?? [.files, .contacts, .mail, .messages, .apps])
         hasSeenWelcome = store.bool(forKey: Key.hasSeenWelcome)
+
+        if let saved = store.string(forKey: Key.panelFrame) {
+            let rect = NSRectFromString(saved)
+            panelFrame = rect.width > 0 ? rect : nil
+        } else {
+            panelFrame = nil
+        }
     }
 
     private enum Key {
@@ -41,6 +49,7 @@ final class ScoutSettings {
         static let pinExactAppMatch = "pinExactAppMatch"
         static let enabledLanes = "enabledLanes"
         static let hasSeenWelcome = "hasSeenWelcome"
+        static let panelFrame = "panelFrame"
     }
 
     /// Which scope the panel opens on.
@@ -77,6 +86,18 @@ final class ScoutSettings {
 
     var hasSeenWelcome: Bool {
         didSet { store.set(hasSeenWelcome, forKey: Key.hasSeenWelcome) }
+    }
+
+    /// Where the panel was left, in size and position. Nil until it has been moved or resized
+    /// once, which is what lets the first appearance be a sensible default instead.
+    var panelFrame: NSRect? {
+        didSet {
+            if let panelFrame {
+                store.set(NSStringFromRect(panelFrame), forKey: Key.panelFrame)
+            } else {
+                store.removeObject(forKey: Key.panelFrame)
+            }
+        }
     }
 
     /// The exclusions a file search runs with, assembled from the switches above.

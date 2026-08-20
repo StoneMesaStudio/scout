@@ -8,9 +8,6 @@ struct SearchRootView: View {
     @Bindable var model: SearchModel
     @FocusState private var fieldFocused: Bool
 
-    /// Wide enough that a long filename and its folder both fit without eliding.
-    private let panelWidth: CGFloat = 820
-
     var body: some View {
         VStack(spacing: 0) {
             field
@@ -22,17 +19,23 @@ struct SearchRootView: View {
                 Divider().opacity(0.5)
             }
 
-            if !model.sections.isEmpty {
-                results
-                Divider().opacity(0.5)
-            } else if !model.text.isEmpty {
-                emptyState
-                Divider().opacity(0.5)
+            // The results area always claims the space left over, so the panel keeps its shape
+            // whether it is showing sixty rows, none, or nothing typed yet.
+            Group {
+                if !model.sections.isEmpty {
+                    results
+                } else if !model.text.isEmpty {
+                    emptyState
+                } else {
+                    idleState
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            Divider().opacity(0.5)
             footer
         }
-        .frame(width: panelWidth)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
@@ -162,7 +165,7 @@ struct SearchRootView: View {
                 }
                 .padding(8)
             }
-            .frame(maxHeight: 520)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onChange(of: model.selection) { _, new in
                 withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(new, anchor: .center) }
             }
@@ -215,19 +218,49 @@ struct SearchRootView: View {
     /// "Nothing matched" has to be distinguishable from "still searching" and from "not allowed
     /// to look" — the same blank list otherwise stands for all three.
     private var emptyState: some View {
-        HStack(spacing: 10) {
+        VStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
+                .font(.system(size: 26))
+                .foregroundStyle(.tertiary)
             Text("Nothing matches “\(model.text)”.")
-            Spacer()
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
             if model.enabledLanes.contains(.files), model.scope == .myFiles {
                 Button("Search the whole Mac") { model.toggleScope() }
                     .buttonStyle(.link)
+                    .font(.system(size: 13))
             }
         }
-        .font(.system(size: 13))
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 20)
+        // Greedy, so it centres in the whole panel rather than shrink-wrapping into a band.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Before anything is typed. Says which sources are on, so an empty panel still answers the
+    /// question "what is this about to search".
+    private var idleState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 30))
+                .foregroundStyle(.tertiary)
+            Text("Start typing")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text(sourceSummary)
+                .font(.system(size: 12.5))
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 40)
+    }
+
+    private var sourceSummary: String {
+        let names = SearchLane.allCases
+            .filter { model.enabledLanes.contains($0) }
+            .map(\.title)
+        guard !names.isEmpty else { return "No sources are switched on." }
+        guard names.count > 1 else { return "Searching \(names[0])." }
+        return "Searching " + names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1] + "."
     }
 
     // MARK: - Footer
