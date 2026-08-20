@@ -150,39 +150,51 @@ struct SearchRootView: View {
     private var results: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                // One list, one walk. Headers and rows are interleaved by the model so a heading
-                // cannot end up drawn above another section's results.
-                LazyVStack(alignment: .leading, spacing: 2) {
+                // A plain VStack, not a lazy one. A LazyVStack recycles its row views, and with
+                // a heterogeneous list — headings, notices and six kinds of result — it was
+                // handing a row of one type the view built for another: mail results drawn as
+                // messages, headings sitting over the wrong section. At forty rows there is
+                // nothing to gain from laziness anyway.
+                VStack(alignment: .leading, spacing: 2) {
+                    // Every item carries the same kind of identity — its own id, applied once,
+                    // to whatever it draws. Giving only some of them an explicit `.id` left
+                    // SwiftUI matching rows to the wrong items when the list changed shape.
                     ForEach(model.displayItems) { item in
-                        switch item {
-                        case .header(let lane, let count):
-                            SectionHeader(lane: lane, count: count)
-
-                        case .status(let lane, let status):
-                            LaneStatusView(status: status, lane: lane) {
-                                model.requestContactsAccess()
-                            }
-
-                        case .row(let row, let index):
-                            PanelRowView(row: row, selected: model.selection == index)
-                                .id(index)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    model.selection = index
-                                    model.activate()
-                                }
-
-                        case .hiddenNotice:
-                            hiddenNotice
-                        }
+                        itemView(item)
+                            .id(item.id)
                     }
                 }
                 .padding(8)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .onChange(of: model.selection) { _, new in
-                withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(new, anchor: .center) }
+            .onChange(of: model.selection) { _, _ in
+                guard let id = model.selectedItemID else { return }
+                withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(id, anchor: .center) }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func itemView(_ item: PanelItem) -> some View {
+        switch item {
+        case .header(let lane, let count):
+            SectionHeader(lane: lane, count: count)
+
+        case .status(let lane, let status):
+            LaneStatusView(status: status, lane: lane) {
+                model.requestContactsAccess()
+            }
+
+        case .row(let row, let index):
+            PanelRowView(row: row, selected: model.selection == index)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    model.selection = index
+                    model.activate()
+                }
+
+        case .hiddenNotice:
+            hiddenNotice
         }
     }
 

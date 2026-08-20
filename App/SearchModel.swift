@@ -455,6 +455,14 @@ final class SearchModel {
         return index
     }
 
+    /// The id of the item holding the selection, for scrolling it into view.
+    var selectedItemID: String? {
+        displayItems.first {
+            if case .row(_, let index) = $0 { return index == selection }
+            return false
+        }?.id
+    }
+
     var selectedRow: PanelRow? {
         rows.indices.contains(selection) ? rows[selection] : nil
     }
