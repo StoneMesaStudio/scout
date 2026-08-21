@@ -90,6 +90,20 @@ public enum Diagnostics {
             lines.append("searchable_messages.message type: \(sample.string(0) ?? "?"), first length: \(sample.int64(1))")
         }
 
+        // Which column message_global_data actually keys on.
+        for (label, sql) in [
+            ("g.message_id = m.ROWID", "SELECT COUNT(*) FROM messages m JOIN message_global_data g ON g.message_id = m.ROWID WHERE g.message_id_header IS NOT NULL AND ?1 IS NOT NULL"),
+            ("g.message_id = m.message_id", "SELECT COUNT(*) FROM messages m JOIN message_global_data g ON g.message_id = m.message_id WHERE g.message_id_header IS NOT NULL AND ?1 IS NOT NULL"),
+            ("g.ROWID = m.ROWID", "SELECT COUNT(*) FROM messages m JOIN message_global_data g ON g.ROWID = m.ROWID WHERE g.message_id_header IS NOT NULL AND ?1 IS NOT NULL"),
+        ] {
+            count("join on \(label)", sql)
+        }
+
+        if let sample = try? db.prepare("SELECT typeof(message_id), length(message_id) FROM message_global_data LIMIT 1"),
+           (try? sample.step()) == true {
+            lines.append("message_global_data.message_id type: \(sample.string(0) ?? "?"), length \(sample.int64(1))")
+        }
+
         // The real code path, not just the SQL: this is what the Mail lane actually calls.
         if let page = try? mail.search(term, limit: 40) {
             let hits = page.items
@@ -128,6 +142,18 @@ public enum Diagnostics {
             )
             if let page = try? withBodies.search(term, limit: 10) {
                 lines.append("mail search including bodies: \(page.items.count) of \(page.total)")
+            }
+
+            // How many indexed bodies contain the word at all, and how many of those tie back to
+            // a message — the two numbers that tell a join failure from a not-yet-indexed word.
+            if let bodyDB = try? SQLiteDatabase.openReadOnly(bodies.databaseLocation) {
+                if let counter = try? bodyDB.prepare("SELECT COUNT(*) FROM bodies WHERE bodies MATCH ?1") {
+                    counter.bind(MailIndex.ftsQuery(for: term), at: 1)
+                    lines.append("indexed bodies containing it: \((try? counter.step()) == true ? String(counter.int64(0)) : "?")")
+                }
+                if let counter = try? bodyDB.prepare("SELECT COUNT(*) FROM bodies") {
+                    lines.append("bodies stored: \((try? counter.step()) == true ? String(counter.int64(0)) : "?")")
+                }
             }
         }
 

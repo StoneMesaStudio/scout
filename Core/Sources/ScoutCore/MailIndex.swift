@@ -81,24 +81,34 @@ public final class MailIndex {
 
         let pattern = "%\(Self.escapeForLike(trimmed))%"
 
-        // Attach Scout's body index, if it has been built, so subject, sender and body are one
-        // query — which is the only way the count and the ordering can both be right.
+        // Scout's body index is consulted on its own connection and its answers are carried into
+        // this one through a temporary table.
+        //
+        // ATTACH was the obvious way and it does not work: the body index runs in write-ahead
+        // logging mode, an attached database inherits the read-only flags of the connection it
+        // joins, and a read-only attach of a WAL database fails. It failed quietly, too — the
+        // body clause simply vanished and the search went on returning subject matches only.
         var bodyMatch = ""
-        if let bodyIndexLocation, FileManager.default.fileExists(atPath: bodyIndexLocation.path) {
-            let escaped = bodyIndexLocation.path.replacingOccurrences(of: "'", with: "''")
-            if (try? database.execute("ATTACH DATABASE '\(escaped)' AS bodies")) != nil {
+        if let bodyIndexLocation {
+            let ids = Self.bodyMatches(for: trimmed, at: bodyIndexLocation)
+            if !ids.isEmpty {
+                try database.execute("CREATE TEMP TABLE IF NOT EXISTS body_hits(message_id TEXT PRIMARY KEY)")
+                try database.execute("DELETE FROM body_hits")
+                try database.execute("BEGIN")
+                let insert = try database.prepare("INSERT OR IGNORE INTO body_hits(message_id) VALUES (?1)")
+                for id in ids {
+                    insert.reset()
+                    insert.bind(id, at: 1)
+                    try insert.step()
+                }
+                try database.execute("COMMIT")
+
                 bodyMatch = """
-                    OR trim(g.message_id_header, '<>') IN (
-                        SELECT message_id FROM bodies.bodies WHERE bodies MATCH ?3
-                    )
+                    OR trim(g.message_id_header, '<>') IN (SELECT message_id FROM body_hits)
                 """
             }
         }
-        let ftsQuery = Self.ftsQuery(for: trimmed)
 
-        // Subject, sender name and sender address, in one pass. Recipients are a second pass
-        // because that join multiplies rows and would otherwise slow down every search for the
-        // sake of the rarer case.
         let statement = try database.prepare("""
             SELECT m.ROWID, s.subject, a.comment, a.address, m.date_received, m.date_sent,
                    b.url, g.message_id_header, m.read
@@ -106,7 +116,7 @@ public final class MailIndex {
             LEFT JOIN subjects  s ON s.ROWID = m.subject
             LEFT JOIN addresses a ON a.ROWID = m.sender
             LEFT JOIN mailboxes b ON b.ROWID = m.mailbox
-            LEFT JOIN message_global_data g ON g.message_id = m.ROWID
+            LEFT JOIN message_global_data g ON g.message_id = m.message_id
             WHERE m.deleted = 0
               AND (s.subject LIKE ?1 ESCAPE '\\'
                    OR a.comment LIKE ?1 ESCAPE '\\'
@@ -117,7 +127,6 @@ public final class MailIndex {
         """)
         statement.bind(pattern, at: 1)
         statement.bind(Int64(limit), at: 2)
-        if !bodyMatch.isEmpty { statement.bind(ftsQuery, at: 3) }
 
         var hits: [MailHit] = []
         while try statement.step() {
@@ -128,7 +137,7 @@ public final class MailIndex {
         // there is.
         let total = hits.count < limit
             ? hits.count
-            : try Self.count(in: database, pattern: pattern, bodyMatch: bodyMatch, ftsQuery: ftsQuery)
+            : try Self.count(in: database, pattern: pattern, bodyMatch: bodyMatch)
         return SearchPage(items: hits, total: total)
     }
 
@@ -137,8 +146,7 @@ public final class MailIndex {
     private static func count(
         in database: SQLiteDatabase,
         pattern: String,
-        bodyMatch: String,
-        ftsQuery: String
+        bodyMatch: String
     ) throws -> Int {
         let statement = try database.prepare("""
             SELECT COUNT(*)
@@ -146,7 +154,7 @@ public final class MailIndex {
             LEFT JOIN subjects  s ON s.ROWID = m.subject
             LEFT JOIN addresses a ON a.ROWID = m.sender
             LEFT JOIN mailboxes b ON b.ROWID = m.mailbox
-            LEFT JOIN message_global_data g ON g.message_id = m.ROWID
+            LEFT JOIN message_global_data g ON g.message_id = m.message_id
             WHERE m.deleted = 0
               AND (s.subject LIKE ?1 ESCAPE '\\'
                    OR a.comment LIKE ?1 ESCAPE '\\'
@@ -154,8 +162,29 @@ public final class MailIndex {
                    \(bodyMatch))
         """)
         statement.bind(pattern, at: 1)
-        if !bodyMatch.isEmpty { statement.bind(ftsQuery, at: 3) }
         return try statement.step() ? Int(statement.int64(0)) : 0
+    }
+
+    /// Message-IDs whose body contains the query, read from Scout's own index.
+    ///
+    /// Capped: a common word can match tens of thousands of messages, and the list has to be
+    /// carried across into the other database.
+    static func bodyMatches(for query: String, at location: URL, cap: Int = 20_000) -> [String] {
+        guard FileManager.default.fileExists(atPath: location.path),
+              let database = try? SQLiteDatabase.openReadOnly(location),
+              let statement = try? database.prepare(
+                  "SELECT message_id FROM bodies WHERE bodies MATCH ?1 LIMIT ?2"
+              )
+        else { return [] }
+
+        statement.bind(ftsQuery(for: query), at: 1)
+        statement.bind(Int64(cap), at: 2)
+
+        var ids: [String] = []
+        while (try? statement.step()) == true {
+            if let id = statement.string(0), !id.isEmpty { ids.append(id) }
+        }
+        return ids
     }
 
     /// Every word quoted so punctuation cannot be read as an FTS operator, with the last word a

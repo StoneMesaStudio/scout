@@ -20,7 +20,7 @@ func makeEnvelopeIndex(
             ROWID INTEGER PRIMARY KEY, message_id TEXT, subject INTEGER, sender INTEGER,
             mailbox INTEGER, date_received INTEGER, date_sent INTEGER, read INTEGER, deleted INTEGER
         );
-        CREATE TABLE message_global_data (ROWID INTEGER PRIMARY KEY, message_id INTEGER, message_id_header TEXT);
+        CREATE TABLE message_global_data (ROWID INTEGER PRIMARY KEY, message_id TEXT, message_id_header TEXT);
     """)
 
     for (index, message) in messages.enumerated() {
@@ -54,8 +54,9 @@ func makeEnvelopeIndex(
         try insert.step()
 
         // Mail keeps the real RFC Message-ID in a table separate from the one it joins on.
+        // Keyed on the message-id string, the way Mail keys it — not on the row id.
         let globalSQL = "INSERT INTO message_global_data (ROWID, message_id, message_id_header)"
-            + " VALUES (?1, ?1, ?2)"
+            + " VALUES (?1, ?2, ?2)"
         let insertGlobal = try db.prepare(globalSQL)
         insertGlobal.bind(message.id, at: 1)
         insertGlobal.bind(message.messageID, at: 2)
