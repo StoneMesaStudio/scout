@@ -10,8 +10,14 @@ struct SearchRootView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            field
-            sourceBar
+            VStack(spacing: 0) {
+                field
+                sourceBar
+            }
+            // Drag anywhere in the top bar to move the panel. Only the top bar: making the
+            // results draggable would mean a slightly-moved click on a result moved the window
+            // instead of opening the thing.
+            .background(WindowDragHandle())
             Divider().opacity(0.5)
 
             if model.hasChips {
