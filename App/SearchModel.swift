@@ -375,7 +375,7 @@ final class SearchModel {
     /// Bounded slices rather than one long run, so the lane answers throughout — the first pass
     /// over a long archive is tens of thousands of files. Each slice re-searches, so results
     /// improve while it works instead of only at the end.
-    private func startMailIndexingIfNeeded() {
+    func startMailIndexingIfNeeded() {
         guard settings.searchMailBodies, mailIndexTask == nil else { return }
 
         mailIndexTask = Task { [mail] in

@@ -67,6 +67,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installStatusItem()
         installHotKeys()
 
+        // Begin reading the mail archive straight away rather than waiting for a search.
+        panel.startBackgroundIndexing()
+
         // The panel asks for Settings this way rather than reaching for the app delegate.
         NotificationCenter.default.addObserver(
             forName: SettingsWindowController.openNotification,

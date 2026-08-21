@@ -86,6 +86,14 @@ final class PanelController {
         }
     }
 
+    /// Start reading the mail archive without waiting for anyone to open the panel.
+    ///
+    /// It used to begin only when a mail search ran, which meant an archive was only ever indexed
+    /// in the slices between searches — it would take days to finish by accident.
+    func startBackgroundIndexing() {
+        model.startMailIndexingIfNeeded()
+    }
+
     func toggle() {
         if panel?.isVisible == true { hide() } else { show() }
     }
