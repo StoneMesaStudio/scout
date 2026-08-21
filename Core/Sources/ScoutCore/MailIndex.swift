@@ -57,9 +57,12 @@ public final class MailIndex {
     }
 
     /// Newest first: mail is nearly always searched for the most recent time something was said.
-    public func search(_ query: String, limit: Int = 40) throws -> [MailHit] {
+    ///
+    /// The total comes back with the page, because "6 of 2,367" and a bare six mean very
+    /// different things to someone deciding whether to keep typing.
+    public func search(_ query: String, limit: Int = 40) throws -> SearchPage<MailHit> {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 2 else { return [] }
+        guard trimmed.count >= 2 else { return .empty }
         guard isAccessible else { throw Failure.notAccessible }
         guard let location = locateIndex() else { throw Failure.noIndexFound }
 
@@ -96,7 +99,26 @@ public final class MailIndex {
         while try statement.step() {
             hits.append(Self.hit(from: statement))
         }
-        return hits
+
+        // Only worth a second pass when the page filled up; otherwise what came back is all
+        // there is.
+        let total = hits.count < limit ? hits.count : try Self.count(in: database, pattern: pattern)
+        return SearchPage(items: hits, total: total)
+    }
+
+    private static func count(in database: SQLiteDatabase, pattern: String) throws -> Int {
+        let statement = try database.prepare("""
+            SELECT COUNT(*)
+            FROM messages m
+            LEFT JOIN subjects  s ON s.ROWID = m.subject
+            LEFT JOIN addresses a ON a.ROWID = m.sender
+            WHERE m.deleted = 0
+              AND (s.subject LIKE ?1 ESCAPE '\\'
+                   OR a.comment LIKE ?1 ESCAPE '\\'
+                   OR a.address LIKE ?1 ESCAPE '\\')
+        """)
+        statement.bind(pattern, at: 1)
+        return try statement.step() ? Int(statement.int64(0)) : 0
     }
 
     private static func hit(from statement: SQLiteStatement) -> MailHit {
@@ -156,17 +178,17 @@ public actor MailSearchService {
 
     public func currentState() -> State { state }
 
-    public func search(_ query: String, limit: Int = 40) -> [MailHit] {
+    public func search(_ query: String, limit: Int = 40) -> SearchPage<MailHit> {
         do {
-            let hits = try index.search(query, limit: limit)
+            let page = try index.search(query, limit: limit)
             state = .ready
-            return hits
+            return page
         } catch let failure as MailIndex.Failure {
             state = failure == .notAccessible ? .needsFullDiskAccess : .failed(failure.description)
-            return []
+            return .empty
         } catch {
             state = .failed(error.localizedDescription)
-            return []
+            return .empty
         }
     }
 }

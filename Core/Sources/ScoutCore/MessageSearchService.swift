@@ -74,7 +74,7 @@ public actor MessageSearchService {
         }
     }
 
-    public func search(_ query: String, limit: Int = 60) -> [MessageHit] {
-        (try? index.search(query, limit: limit)) ?? []
+    public func search(_ query: String, limit: Int = 60) -> SearchPage<MessageHit> {
+        (try? index.search(query, limit: limit)) ?? .empty
     }
 }

@@ -79,9 +79,21 @@ public enum Diagnostics {
             WHERE (s.subject LIKE ?1 OR a.comment LIKE ?1 OR a.address LIKE ?1)
         """)
 
+        // Mail's own search finds far more than subject-and-sender, so something in here must
+        // hold the body text.
+        count("searchable_messages.message matching", "SELECT COUNT(*) FROM searchable_messages WHERE message LIKE ?1")
+        count("summaries matching", "SELECT COUNT(*) FROM summaries WHERE summary LIKE ?1")
+        count("attachments matching", "SELECT COUNT(*) FROM searchable_attachments WHERE name LIKE ?1")
+
+        if let sample = try? db.prepare("SELECT typeof(message), length(message) FROM searchable_messages LIMIT 1"),
+           (try? sample.step()) == true {
+            lines.append("searchable_messages.message type: \(sample.string(0) ?? "?"), first length: \(sample.int64(1))")
+        }
+
         // The real code path, not just the SQL: this is what the Mail lane actually calls.
-        if let hits = try? mail.search(term, limit: 40) {
-            lines.append("MailIndex.search returned: \(hits.count)")
+        if let page = try? mail.search(term, limit: 40) {
+            let hits = page.items
+            lines.append("MailIndex.search returned: \(hits.count) of \(page.total)")
             lines.append("  with a subject: \(hits.filter { $0.subject != "(no subject)" }.count)")
             lines.append("  with a sender name: \(hits.filter { $0.senderAddress != nil }.count)")
             lines.append("  with a date: \(hits.filter { $0.date != nil }.count)")
@@ -95,9 +107,9 @@ public enum Diagnostics {
         let messages = MessageIndex()
         do {
             let added = try messages.sync()
-            let hits = try messages.search(term, limit: 40)
+            let page = try messages.search(term, limit: 40)
             lines.append("MessageIndex.sync added: \(added)")
-            lines.append("MessageIndex.search returned: \(hits.count)")
+            lines.append("MessageIndex.search returned: \(page.items.count) of \(page.total)")
         } catch {
             lines.append("MessageIndex failed: \(error)")
         }

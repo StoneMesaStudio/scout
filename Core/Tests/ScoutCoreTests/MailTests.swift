@@ -114,7 +114,7 @@ private let received: Int64 = 1_770_000_000
             (1, "F350 60,000 mile service", "Bob's Auto", "bob@example.com", "imap://x/Archive", received, "<a@b>", true, false),
             (2, "Dinner Thursday", "Jennifer", "j@example.com", "imap://x/INBOX", received, "<c@d>", true, false),
         ])
-        let hits = try index.search("service")
+        let hits = try index.search("service").items
         #expect(hits.count == 1)
         #expect(hits.first?.sender == "Bob's Auto")
         #expect(hits.first?.mailbox == "Archive")
@@ -125,21 +125,21 @@ private let received: Int64 = 1_770_000_000
         let index = try makeIndex([
             (1, "Quote attached", "Jose Ramirez", "jose@example.com", "imap://x/Archive", received, "<a@b>", true, false),
         ])
-        #expect(try index.search("jose").count == 1)
+        #expect(try index.search("jose").items.count == 1)
     }
 
     @Test func anAddressIsSearchableToo() throws {
         let index = try makeIndex([
             (1, "Hello", "Someone", "jose@capitolford.com", "imap://x/Archive", received, "<a@b>", true, false),
         ])
-        #expect(try index.search("capitolford").count == 1)
+        #expect(try index.search("capitolford").items.count == 1)
     }
 
     @Test func deletedMessagesStayDeleted() throws {
         let index = try makeIndex([
             (1, "service", "A", "a@b.com", "imap://x/Archive", received, "<a@b>", true, true),
         ])
-        #expect(try index.search("service").isEmpty)
+        #expect(try index.search("service").items.isEmpty)
     }
 
     @Test func newestFirst() throws {
@@ -147,21 +147,21 @@ private let received: Int64 = 1_770_000_000
             (1, "service one", "A", "a@b.com", "imap://x/Archive", received, "<a@b>", true, false),
             (2, "service two", "B", "b@b.com", "imap://x/Archive", received + 86_400, "<c@d>", true, false),
         ])
-        #expect(try index.search("service").map(\.rowID) == [2, 1])
+        #expect(try index.search("service").items.map(\.rowID) == [2, 1])
     }
 
     @Test func unreadIsCarriedThrough() throws {
         let index = try makeIndex([
             (1, "service", "A", "a@b.com", "imap://x/Archive", received, "<a@b>", false, false),
         ])
-        #expect(try index.search("service").first?.isUnread == true)
+        #expect(try index.search("service").items.first?.isUnread == true)
     }
 
     @Test func aMessageWithNoSubjectSaysSoRatherThanShowingNothing() throws {
         let index = try makeIndex([
             (1, "", "Jose", "jose@example.com", "imap://x/Archive", received, "<a@b>", true, false),
         ])
-        #expect(try index.search("jose").first?.subject == "(no subject)")
+        #expect(try index.search("jose").items.first?.subject == "(no subject)")
     }
 
     @Test func theNewestMailVersionFolderWins() throws {
@@ -199,7 +199,7 @@ private let received: Int64 = 1_770_000_000
             (1, "service today", "A", "a@b.com", "imap://x/Deleted Messages", received + 86_400, "<a@b>", true, false),
             (2, "service last week", "B", "b@b.com", "imap://x/Archive", received, "<c@d>", true, false),
         ])
-        let hits = try MailIndex(mailDirectory: directory).search("service")
+        let hits = try MailIndex(mailDirectory: directory).search("service").items
         #expect(hits.map(\.mailbox) == ["Archive", "Deleted Messages"])
     }
 }

@@ -31,10 +31,29 @@ public struct ContactHit: Identifiable, Sendable, Hashable {
     }
 }
 
-/// The Contacts lane.
+/// A contact with everything about it that is worth matching, which is a good deal more than
+/// what gets shown.
 ///
-/// Contacts are their own store with their own permission — nothing to do with Full Disk Access —
-/// so this lane can work even when Mail and Messages cannot.
+/// A card filed under a company name can still have a person's first name on it — "JLC Plumbing"
+/// with Jose in the first-name field — and searching for the person has to find it. So the
+/// matching sees every name field, every number and every address on the card, not just the ones
+/// the row displays.
+public struct ContactRecord: Sendable {
+
+    public let hit: ContactHit
+    /// Every string on the card worth matching against.
+    public let searchable: [String]
+    /// Just the digits of every number, so "6522909" finds "1 (505) 652-2909".
+    public let phoneDigits: [String]
+
+    public init(hit: ContactHit, searchable: [String], phoneDigits: [String]) {
+        self.hit = hit
+        self.searchable = searchable
+        self.phoneDigits = phoneDigits
+    }
+}
+
+/// Reads the Contacts store.
 public struct ContactSearcher: Sendable {
 
     public enum Access: Sendable, Equatable {
@@ -58,49 +77,85 @@ public struct ContactSearcher: Sendable {
         (try? await CNContactStore().requestAccess(for: .contacts)) ?? false
     }
 
-    /// Built per call rather than held in a static: `CNKeyDescriptor` predates Sendable, and the
-    /// list is three array literals' worth of work.
+    /// Built per call rather than held in a static: `CNKeyDescriptor` predates Sendable.
     private static func keysToFetch() -> [CNKeyDescriptor] {
         [
             CNContactFormatter.descriptorForRequiredKeys(for: .fullName),
+            CNContactGivenNameKey as CNKeyDescriptor,
+            CNContactMiddleNameKey as CNKeyDescriptor,
+            CNContactFamilyNameKey as CNKeyDescriptor,
+            CNContactPreviousFamilyNameKey as CNKeyDescriptor,
+            CNContactNicknameKey as CNKeyDescriptor,
             CNContactOrganizationNameKey as CNKeyDescriptor,
+            CNContactDepartmentNameKey as CNKeyDescriptor,
+            CNContactJobTitleKey as CNKeyDescriptor,
             CNContactPhoneNumbersKey as CNKeyDescriptor,
             CNContactEmailAddressesKey as CNKeyDescriptor,
+            CNContactPostalAddressesKey as CNKeyDescriptor,
+            CNContactNoteKey as CNKeyDescriptor,
+            CNContactTypeKey as CNKeyDescriptor,
         ]
     }
 
-    /// Every contact, as a list we can search ourselves.
+    /// Every contact, as records we can search ourselves.
     ///
-    /// Apple's own `predicateForContacts(matchingName:)` was the obvious route and it is wrong in
-    /// both directions: searching "Jose" returned Joan, John and Joyce — it matches names that
-    /// merely sound or start alike — while missing "Hernandez Jose" and "Sabutis Joseph"
-    /// altogether. Reading the contacts once and matching them here is both correct and faster,
-    /// and it is the same principle as the rest of Scout: own the matching.
-    public func loadAll() -> [ContactHit] {
+    /// Apple's `predicateForContacts(matchingName:)` was the obvious route and it is wrong in both
+    /// directions: searching "Jose" returned Joan, John and Joyce — it matches names that merely
+    /// sound alike — while missing "Hernandez Jose" and "Sabutis Joseph" altogether.
+    public func loadAll() -> [ContactRecord] {
         guard access == .allowed else { return [] }
 
         let request = CNContactFetchRequest(keysToFetch: Self.keysToFetch())
         request.unifyResults = true
         request.sortOrder = .givenName
 
-        var hits: [ContactHit] = []
+        var records: [ContactRecord] = []
         try? CNContactStore().enumerateContacts(with: request) { contact, _ in
-            hits.append(Self.hit(from: contact))
+            records.append(Self.record(from: contact))
         }
-        return hits
+        return records
     }
 
-    private static func hit(from contact: CNContact) -> ContactHit {
-        let formatted = CNContactFormatter.string(from: contact, style: .fullName) ?? ""
-        let name = [formatted, contact.organizationName]
-            .first { !$0.isEmpty } ?? "No name"
+    static func record(from contact: CNContact) -> ContactRecord {
+        let phones = contact.phoneNumbers.map(\.value.stringValue)
+        let emails = contact.emailAddresses.map { $0.value as String }
+        let addresses = contact.postalAddresses.map {
+            [$0.value.street, $0.value.city, $0.value.state, $0.value.postalCode]
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+        }
 
-        return ContactHit(
+        // Note is fetched but not searched: it is where people keep things they would not expect
+        // a search box to surface.
+        let names = [
+            contact.givenName, contact.middleName, contact.familyName,
+            contact.previousFamilyName, contact.nickname,
+            contact.organizationName, contact.departmentName, contact.jobTitle,
+        ]
+
+        let hit = ContactHit(
             identifier: contact.identifier,
-            name: name,
+            name: displayName(for: contact),
             organization: contact.organizationName.isEmpty ? nil : contact.organizationName,
-            phone: contact.phoneNumbers.first?.value.stringValue,
-            email: contact.emailAddresses.first?.value as String?
+            phone: phones.first,
+            email: emails.first
         )
+
+        return ContactRecord(
+            hit: hit,
+            searchable: (names + phones + emails + addresses).filter { !$0.isEmpty },
+            phoneDigits: phones.map { $0.filter(\.isNumber) }.filter { !$0.isEmpty }
+        )
+    }
+
+    /// The name Contacts itself would show. A card marked as a company is filed under the company
+    /// name even when it has a person's name on it too.
+    static func displayName(for contact: CNContact) -> String {
+        if contact.contactType == .organization, !contact.organizationName.isEmpty {
+            return contact.organizationName
+        }
+        let formatted = CNContactFormatter.string(from: contact, style: .fullName) ?? ""
+        return [formatted, contact.organizationName, contact.nickname]
+            .first { !$0.isEmpty } ?? "No name"
     }
 }

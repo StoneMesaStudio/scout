@@ -110,9 +110,9 @@ public final class MessageIndex {
 
     /// Newest first, because a conversation is almost always searched to find the most recent
     /// time something was said.
-    public func search(_ query: String, limit: Int = 60) throws -> [MessageHit] {
+    public func search(_ query: String, limit: Int = 60) throws -> SearchPage<MessageHit> {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 2 else { return [] }
+        guard trimmed.count >= 2 else { return .empty }
 
         let index = try openIndex()
         let statement = try index.prepare("""
@@ -138,7 +138,15 @@ public final class MessageIndex {
                 hasAttachment: statement.bool(6)
             ))
         }
-        return hits
+
+        // Only worth a second pass when the page filled up.
+        var total = hits.count
+        if hits.count == limit {
+            let counter = try index.prepare("SELECT COUNT(*) FROM messages WHERE messages MATCH ?1")
+            counter.bind(Self.ftsQuery(for: trimmed), at: 1)
+            total = try counter.step() ? Int(counter.int64(0)) : hits.count
+        }
+        return SearchPage(items: hits, total: total)
     }
 
     /// Turn what the user typed into an FTS5 query.

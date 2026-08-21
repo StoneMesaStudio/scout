@@ -107,7 +107,7 @@ private func temporaryDirectory() -> URL {
         ])
         try index.sync()
 
-        let hits = try index.search("service")
+        let hits = try index.search("service").items
         #expect(hits.count == 1)
         #expect(hits.first?.counterpart == "+19165550142")
         #expect(hits.first?.chatIdentifier == "chat1")
@@ -120,7 +120,7 @@ private func temporaryDirectory() -> URL {
             (1, nil, makeAttributedBody("the service guy's number"), "+19165550142", "chat1", stamp, false),
         ])
         try index.sync()
-        #expect(try index.search("service").count == 1)
+        #expect(try index.search("service").items.count == 1)
     }
 
     @Test func aPartialLastWordStillMatchesWhileTyping() throws {
@@ -128,7 +128,7 @@ private func temporaryDirectory() -> URL {
             (1, "out of service til Thursday", nil, "+1", "chat1", stamp, false),
         ])
         try index.sync()
-        #expect(try index.search("serv").count == 1)
+        #expect(try index.search("serv").items.count == 1)
     }
 
     @Test func newestFirst() throws {
@@ -137,7 +137,7 @@ private func temporaryDirectory() -> URL {
             (2, "service two", nil, "+2", "chat2", stamp + 86_400_000_000_000, false),
         ])
         try index.sync()
-        #expect(try index.search("service").map(\.rowID) == [2, 1])
+        #expect(try index.search("service").items.map(\.rowID) == [2, 1])
     }
 
     @Test func syncingTwiceAddsNothingTheSecondTime() throws {
@@ -171,7 +171,7 @@ private func temporaryDirectory() -> URL {
 
         let index = MessageIndex(source: source, location: directory.appending(path: "index.sqlite"))
         #expect(try index.sync() == 1)
-        #expect(try index.search("service").count == 1)
+        #expect(try index.search("service").items.count == 1)
     }
 
     @Test func aMissingDatabaseReadsAsAPermissionProblem() {

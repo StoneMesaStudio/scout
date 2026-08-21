@@ -206,12 +206,17 @@ private func folder(_ path: String, modified: Date? = nil) -> SearchResult {
 
 @Suite struct ContactIndexTests {
 
-    private func contact(_ name: String, organization: String? = nil, phone: String? = nil, email: String? = nil) -> ContactHit {
-        ContactHit(identifier: name, name: name, organization: organization, phone: phone, email: email)
+    private func contact(_ name: String, organization: String? = nil, phone: String? = nil, email: String? = nil) -> ContactRecord {
+        let hit = ContactHit(identifier: name, name: name, organization: organization, phone: phone, email: email)
+        return ContactRecord(
+            hit: hit,
+            searchable: [name, organization, phone, email].compactMap(\.self),
+            phoneDigits: [(phone ?? "").filter(\.isNumber)].filter { !$0.isEmpty }
+        )
     }
 
     private var index: ContactIndex {
-        ContactIndex(contacts: [
+        ContactIndex(records: [
             contact("Hernandez Jose", organization: "EFR 112 EMT-B"),
             contact("Sabutis Joseph"),
             contact("Joseph 72 Colinas", phone: "1 (505) 652-2909"),
@@ -225,7 +230,7 @@ private func folder(_ path: String, modified: Date? = nil) -> SearchResult {
     @Test func onlyNamesThatActuallyContainTheQueryComeBack() {
         // Apple's own name predicate returned Joan, John and Joyce for "Jose" — it matches names
         // that merely sound alike — while missing the actual Joses.
-        let names = index.search("Jose").map(\.name)
+        let names = index.search("Jose").items.map(\.name)
         #expect(names.contains("Hernandez Jose"))
         #expect(names.contains("Sabutis Joseph"))
         #expect(!names.contains("Bauer Joan"))
@@ -236,31 +241,53 @@ private func folder(_ path: String, modified: Date? = nil) -> SearchResult {
     @Test func namesLeadOverEverythingElse() {
         // Both Joses match a whole word of their name, so they tie and sort by name — either
         // order is right, but they both belong above a company or an address match.
-        let top = index.search("Jose").prefix(2).map(\.name)
+        let top = index.search("Jose").items.prefix(2).map(\.name)
         #expect(top.contains("Hernandez Jose"))
         #expect(top.contains("Joseph 72 Colinas"))
     }
 
     @Test func anEmailAddressCountsButRanksBelowANameOrCompany() {
         // JLC Plumbing only matches through its address, so it comes last.
-        #expect(index.search("Jose").map(\.name).last == "JLC Plumbing")
+        #expect(index.search("Jose").items.map(\.name).last == "JLC Plumbing")
     }
 
     @Test func aCompanyIsSearchableToo() {
-        #expect(index.search("presbyterian").map(\.name) == ["Johnson Derek"])
+        #expect(index.search("presbyterian").items.map(\.name) == ["Johnson Derek"])
     }
 
     @Test func partOfAPhoneNumberFindsThePerson() {
         // Typed without punctuation, the way anyone would remember the last few digits.
-        #expect(index.search("6522909").map(\.name) == ["Joseph 72 Colinas"])
+        #expect(index.search("6522909").items.map(\.name) == ["Joseph 72 Colinas"])
     }
 
     @Test func oneLetterIsNotASearch() {
-        #expect(index.search("J").isEmpty)
+        #expect(index.search("J").items.isEmpty)
+    }
+
+    @Test func aCompanyCardIsFoundByThePersonsNameOnIt() {
+        // "JLC Plumbing" is filed under the company but has Jose in the first-name field.
+        // Contacts finds it for "Jose"; Scout was missing it because it only searched the name
+        // it displays.
+        let record = ContactRecord(
+            hit: ContactHit(identifier: "JLC", name: "JLC Plumbing", organization: "JLC Plumbing",
+                            phone: "(505) 795-6188", email: nil),
+            searchable: ["Jose", "JLC Plumbing", "(505) 795-6188"],
+            phoneDigits: ["5057956188"]
+        )
+        let index = ContactIndex(records: [record])
+        #expect(index.search("Jose").items.map(\.name) == ["JLC Plumbing"])
+    }
+
+    @Test func aPageSaysHowManyThereWereAltogether() {
+        let many = (1...30).map { contact("Jose \($0)") }
+        let page = ContactIndex(records: many).search("Jose", limit: 5)
+        #expect(page.items.count == 5)
+        #expect(page.total == 30)
+        #expect(page.hiddenCount == 25)
     }
 
     @Test func accentsAndCaseDoNotMatter() {
-        let index = ContactIndex(contacts: [contact("José Ramírez")])
-        #expect(index.search("jose").count == 1)
+        let index = ContactIndex(records: [contact("José Ramírez")])
+        #expect(index.search("jose").items.count == 1)
     }
 }

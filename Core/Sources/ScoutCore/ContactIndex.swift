@@ -7,26 +7,17 @@ import Foundation
 /// a match means the text is actually in there.
 public struct ContactIndex: Sendable {
 
-    /// One contact with everything about it flattened into a single searchable string, so a
-    /// query only has to be compared once per person.
     struct Entry: Sendable {
-        let hit: ContactHit
+        let record: ContactRecord
+        /// Everything on the card, folded and joined, so a query is compared once per person.
         let haystack: String
-        /// Just the digits of every number, so "5556789" finds "(505) 555-6789".
-        let phoneDigits: String
     }
 
     private let entries: [Entry]
 
-    public init(contacts: [ContactHit]) {
-        entries = contacts.map { contact in
-            let parts = [contact.name, contact.organization, contact.email, contact.phone]
-                .compactMap(\.self)
-            return Entry(
-                hit: contact,
-                haystack: Self.fold(parts.joined(separator: " ")),
-                phoneDigits: (contact.phone ?? "").filter(\.isNumber)
-            )
+    public init(records: [ContactRecord]) {
+        entries = records.map { record in
+            Entry(record: record, haystack: Self.fold(record.searchable.joined(separator: " ")))
         }
     }
 
@@ -37,10 +28,10 @@ public struct ContactIndex: Sendable {
     }
 
     /// Best matches first: a name that starts with the query beats one that merely contains it,
-    /// and a match on the name beats a match on the company or the address.
-    public func search(_ query: String, limit: Int = 20) -> [ContactHit] {
+    /// and a match on a name beats a match on a company, an address or a number.
+    public func search(_ query: String, limit: Int = 20) -> SearchPage<ContactHit> {
         let needle = Self.fold(query.trimmingCharacters(in: .whitespacesAndNewlines))
-        guard needle.count >= 2 else { return [] }
+        guard needle.count >= 2 else { return .empty }
 
         let digits = needle.filter(\.isNumber)
         let searchingForANumber = digits.count >= 3 && digits.count == needle.count
@@ -48,31 +39,34 @@ public struct ContactIndex: Sendable {
         var scored: [(hit: ContactHit, score: Int)] = []
         for entry in entries {
             if searchingForANumber {
-                if entry.phoneDigits.contains(digits) {
-                    scored.append((entry.hit, 500))
+                if entry.record.phoneDigits.contains(where: { $0.contains(digits) }) {
+                    scored.append((entry.record.hit, 500))
                 }
                 continue
             }
             guard entry.haystack.contains(needle) else { continue }
-            scored.append((entry.hit, Self.score(entry, needle: needle)))
+            scored.append((entry.record.hit, Self.score(entry, needle: needle)))
         }
 
-        return scored
-            .sorted { $0.score == $1.score ? $0.hit.name < $1.hit.name : $0.score > $1.score }
-            .prefix(limit)
-            .map(\.hit)
+        scored.sort { $0.score == $1.score ? $0.hit.name < $1.hit.name : $0.score > $1.score }
+        return SearchPage(items: Array(scored.prefix(limit).map(\.hit)), total: scored.count)
     }
 
     private static func score(_ entry: Entry, needle: String) -> Int {
-        let name = fold(entry.hit.name)
+        let name = fold(entry.record.hit.name)
+        let separators = CharacterSet(charactersIn: " -_.'")
 
         if name == needle { return 1000 }
-        // A word of the name starting with the query — "Jose" in "Hernandez Jose".
-        if name.components(separatedBy: CharacterSet(charactersIn: " -_.'")).contains(where: { $0.hasPrefix(needle) }) {
-            return 800
-        }
+        if name.components(separatedBy: separators).contains(where: { $0.hasPrefix(needle) }) { return 800 }
         if name.contains(needle) { return 600 }
-        if let organization = entry.hit.organization, fold(organization).contains(needle) { return 400 }
+
+        // A name field that isn't the displayed one — the person's first name on a card filed
+        // under their company.
+        let names = entry.record.searchable.prefix(8).map(fold)
+        if names.contains(where: { $0.components(separatedBy: separators).contains(where: { $0.hasPrefix(needle) }) }) {
+            return 500
+        }
+        if let organization = entry.record.hit.organization, fold(organization).contains(needle) { return 400 }
         return 200
     }
 }
@@ -104,13 +98,13 @@ public actor ContactSearchService {
         loadedAt = nil
     }
 
-    public func search(_ query: String, limit: Int = 20, now: Date = Date()) -> [ContactHit] {
-        guard searcher.access == .allowed else { return [] }
+    public func search(_ query: String, limit: Int = 20, now: Date = Date()) -> SearchPage<ContactHit> {
+        guard searcher.access == .allowed else { return .empty }
 
         if index == nil || loadedAt.map({ now.timeIntervalSince($0) > staleAfter }) ?? true {
-            index = ContactIndex(contacts: searcher.loadAll())
+            index = ContactIndex(records: searcher.loadAll())
             loadedAt = now
         }
-        return index?.search(query, limit: limit) ?? []
+        return index?.search(query, limit: limit) ?? .empty
     }
 }

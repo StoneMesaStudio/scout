@@ -41,16 +41,18 @@ enum LaneStatus: Equatable {
 /// One line of the panel as drawn: a heading, an explanation, a result, or the note about what
 /// was left out.
 enum PanelItem: Identifiable {
-    case header(lane: SearchLane, count: Int)
+    case header(lane: SearchLane, count: Int, total: Int)
     case status(lane: SearchLane, status: LaneStatus)
     case row(PanelRow, index: Int)
+    case showMore(lane: SearchLane, remaining: Int)
     case hiddenNotice(count: Int)
 
     var id: String {
         switch self {
-        case .header(let lane, _): "header:\(lane.rawValue)"
+        case .header(let lane, _, _): "header:\(lane.rawValue)"
         case .status(let lane, _): "status:\(lane.rawValue)"
         case .row(let row, let index): "row:\(index):\(row.id)"
+        case .showMore(let lane, _): "more:\(lane.rawValue)"
         case .hiddenNotice: "hidden"
         }
     }
@@ -62,6 +64,8 @@ struct PanelSection: Identifiable {
     let lane: SearchLane
     var rows: [PanelRow]
     var status: LaneStatus
+    /// How many matched altogether, which is usually more than are shown.
+    var total: Int
     var id: String { lane.rawValue }
 }
 
@@ -174,9 +178,40 @@ final class SearchModel {
     private var mailTask: Task<Void, Never>?
     private var contactTask: Task<Void, Never>?
 
-    /// Per-section caps. Files get the room; the rest are there to answer, not to fill the panel.
-    private let fileLimit = 25
-    private let sideLimit = 6
+    /// How many of each source to show before offering the rest. Files get the room; the others
+    /// are there to answer a question, not to fill the panel — but every one of them can be
+    /// opened out, because "6 of 2,367" is only useful if the other 2,361 are reachable.
+    static func defaultLimit(for lane: SearchLane) -> Int {
+        switch lane {
+        case .files: 25
+        case .contacts, .mail, .messages: 12
+        case .apps, .system: 8
+        }
+    }
+
+    /// How many more to add each time the rest are asked for.
+    private let pageSize = 50
+
+    private var laneLimits: [SearchLane: Int] = [:]
+    private var laneTotals: [SearchLane: Int] = [:]
+
+    func limit(for lane: SearchLane) -> Int {
+        laneLimits[lane] ?? Self.defaultLimit(for: lane)
+    }
+
+    /// Show more of one source. Files, apps and settings are already in hand so they just
+    /// re-slice; the other three go back to their store for the next page.
+    func showMore(_ lane: SearchLane) {
+        laneLimits[lane] = limit(for: lane) + pageSize
+        let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch lane {
+        case .contacts where query.count >= 2: searchContacts(query)
+        case .mail where query.count >= 2: searchMail(query)
+        case .messages where query.count >= 2: searchMessages(query)
+        default: rebuildSections()
+        }
+    }
 
     init() {
         searcher.onResults = { [weak self] results in
@@ -190,6 +225,8 @@ final class SearchModel {
 
     func reset() {
         spotlightOwnsCommandSpace = SpotlightShortcut.isEnabled
+        laneLimits.removeAll()
+        laneTotals.removeAll()
         text = ""
         scope = settings.defaultScope
         focusedFolder = nil
@@ -230,6 +267,8 @@ final class SearchModel {
 
     private func runSearch() {
         selection = 0
+        laneLimits.removeAll()
+        laneTotals.removeAll()
         searcher.stop()
         mailTask?.cancel()
         messageTask?.cancel()
@@ -295,10 +334,12 @@ final class SearchModel {
     /// Reading every contact takes long enough to be worth keeping off the main thread, and it
     /// only happens once every few minutes.
     private func searchContacts(_ query: String) {
-        contactTask = Task { [contacts, sideLimit] in
-            let hits = await contacts.search(query, limit: sideLimit)
+        let cap = limit(for: .contacts)
+        contactTask = Task { [contacts] in
+            let page = await contacts.search(query, limit: cap)
             guard !Task.isCancelled, query == self.text.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
-            self.contactRows = hits.map { .contact($0) }
+            self.contactRows = page.items.map { .contact($0) }
+            self.laneTotals[.contacts] = page.total
             self.rebuildSections()
         }
     }
@@ -306,22 +347,24 @@ final class SearchModel {
     /// Mail's own index is read off the main thread — 46,000 messages is not something to scan
     /// while someone is typing.
     private func searchMail(_ query: String) {
-        mailTask = Task { [mail, sideLimit] in
-            let hits = await mail.search(query, limit: sideLimit)
+        let cap = limit(for: .mail)
+        mailTask = Task { [mail] in
+            let page = await mail.search(query, limit: cap)
             let state = await mail.currentState()
             guard !Task.isCancelled else { return }
-            self.applyMail(hits, state: state, query: query)
+            self.applyMail(page, state: state, query: query)
         }
     }
 
-    private func applyMail(_ hits: [MailHit], state: MailSearchService.State, query: String) {
+    private func applyMail(_ page: SearchPage<MailHit>, state: MailSearchService.State, query: String) {
         guard query == text.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
         switch state {
         case .needsFullDiskAccess: mailStatus = .needsFullDiskAccess
         case .failed(let reason): mailStatus = .failed(reason)
         case .ready: mailStatus = .ready
         }
-        mailRows = hits.map { .mail($0) }
+        mailRows = page.items.map { .mail($0) }
+        laneTotals[.mail] = page.total
         rebuildSections()
     }
 
@@ -329,23 +372,25 @@ final class SearchModel {
     /// while a long history is read for the first time.
     private func searchMessages(_ query: String) {
         messageStatus = .building
-        messageTask = Task { [messages, sideLimit] in
+        let cap = limit(for: .messages)
+        messageTask = Task { [messages] in
             await messages.prepare()
             let state = await messages.currentState()
-            let hits = await messages.search(query, limit: sideLimit)
+            let page = await messages.search(query, limit: cap)
             guard !Task.isCancelled else { return }
-            self.applyMessages(hits, state: state, query: query)
+            self.applyMessages(page, state: state, query: query)
         }
     }
 
-    private func applyMessages(_ hits: [MessageHit], state: MessageSearchService.State, query: String) {
+    private func applyMessages(_ page: SearchPage<MessageHit>, state: MessageSearchService.State, query: String) {
         guard query == text.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
         switch state {
         case .needsFullDiskAccess: messageStatus = .needsFullDiskAccess
         case .failed(let reason): messageStatus = .failed(reason)
         case .idle, .building, .ready: messageStatus = .ready
         }
-        messageRows = hits.map { .message($0) }
+        messageRows = page.items.map { .message($0) }
+        laneTotals[.messages] = page.total
         rebuildSections()
     }
 
@@ -357,19 +402,26 @@ final class SearchModel {
         for lane in SearchLane.allCases where enabledLanes.contains(lane) {
             switch lane {
             case .files:
-                built.append(PanelSection(lane: .files, rows: fileRows(), status: .ready))
+                let rows = fileRows()
+                built.append(PanelSection(lane: .files, rows: rows, status: .ready,
+                                          total: laneTotals[.files] ?? rows.count))
             case .contacts:
-                built.append(PanelSection(lane: .contacts, rows: contactRows, status: contactStatus))
+                built.append(PanelSection(lane: .contacts, rows: contactRows, status: contactStatus,
+                                          total: laneTotals[.contacts] ?? contactRows.count))
             case .mail:
-                built.append(PanelSection(lane: .mail, rows: mailRows, status: mailStatus))
+                built.append(PanelSection(lane: .mail, rows: mailRows, status: mailStatus,
+                                          total: laneTotals[.mail] ?? mailRows.count))
             case .messages:
-                built.append(PanelSection(lane: .messages, rows: messageRows, status: messageStatus))
+                built.append(PanelSection(lane: .messages, rows: messageRows, status: messageStatus,
+                                          total: laneTotals[.messages] ?? messageRows.count))
             case .apps:
-                let rows = appIndex.matches(for: text).prefix(sideLimit).map { PanelRow.app($0, pinned: false) }
-                built.append(PanelSection(lane: .apps, rows: Array(rows), status: .ready))
+                let all = appIndex.matches(for: text)
+                let rows = all.prefix(limit(for: .apps)).map { PanelRow.app($0, pinned: false) }
+                built.append(PanelSection(lane: .apps, rows: Array(rows), status: .ready, total: all.count))
             case .system:
-                let rows = paneIndex.matches(for: text).prefix(sideLimit).map { PanelRow.pane($0) }
-                built.append(PanelSection(lane: .system, rows: Array(rows), status: .ready))
+                let all = paneIndex.matches(for: text)
+                let rows = all.prefix(limit(for: .system)).map { PanelRow.pane($0) }
+                built.append(PanelSection(lane: .system, rows: Array(rows), status: .ready, total: all.count))
             }
         }
 
@@ -389,13 +441,17 @@ final class SearchModel {
         var index = 0
 
         for section in sections {
-            items.append(.header(lane: section.lane, count: section.rows.count))
+            items.append(.header(lane: section.lane, count: section.rows.count, total: section.total))
             if section.status != .ready {
                 items.append(.status(lane: section.lane, status: section.status))
             }
             for row in section.rows {
                 items.append(.row(row, index: index))
                 index += 1
+            }
+            let remaining = section.total - section.rows.count
+            if remaining > 0 {
+                items.append(.showMore(lane: section.lane, remaining: remaining))
             }
         }
 
@@ -416,7 +472,9 @@ final class SearchModel {
         // would let you take it back off.
         suggestions = FilterSuggestions.from(Array(ranked.prefix(300)))
 
-        let files = filter.apply(to: ranked).prefix(fileLimit).map { PanelRow.file($0) }
+        let matching = filter.apply(to: ranked)
+        laneTotals[.files] = matching.count
+        let files = matching.prefix(limit(for: .files)).map { PanelRow.file($0) }
 
         // The one exact app-name match sits at the very top so Return still launches apps.
         if settings.pinExactAppMatch, let app = appIndex.exactMatch(for: text), focusedFolder == nil {
@@ -536,6 +594,11 @@ final class SearchModel {
         } else {
             onDismiss?()
         }
+    }
+
+    /// Put the panel back to the size and place it starts at.
+    func resetPanelGeometry() {
+        NotificationCenter.default.post(name: PanelController.resetGeometryNotification, object: nil)
     }
 
     func toggleScope() {

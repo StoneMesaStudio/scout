@@ -177,8 +177,8 @@ struct SearchRootView: View {
     @ViewBuilder
     private func itemView(_ item: PanelItem) -> some View {
         switch item {
-        case .header(let lane, let count):
-            SectionHeader(lane: lane, count: count)
+        case .header(let lane, let count, let total):
+            SectionHeader(lane: lane, count: count, total: total)
 
         case .status(let lane, let status):
             LaneStatusView(status: status, lane: lane) {
@@ -192,6 +192,21 @@ struct SearchRootView: View {
                     model.selection = index
                     model.activate()
                 }
+
+        case .showMore(let lane, let remaining):
+            Button {
+                model.showMore(lane)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
+                    Text("Show more — ^[\(remaining) more result](inflect: true)")
+                }
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+            }
+            .buttonStyle(.plain)
 
         case .hiddenNotice:
             hiddenNotice
@@ -307,6 +322,19 @@ struct SearchRootView: View {
             }
 
             Button {
+                model.resetPanelGeometry()
+            } label: {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 11))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.primary.opacity(0.07), in: Capsule())
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Put the panel back to its default size and position")
+
+            Button {
                 model.openSettings()
             } label: {
                 HStack(spacing: 5) {
@@ -373,6 +401,7 @@ private struct SourceButton: View {
 private struct SectionHeader: View {
     let lane: SearchLane
     let count: Int
+    let total: Int
 
     var body: some View {
         HStack(spacing: 7) {
@@ -382,7 +411,9 @@ private struct SectionHeader: View {
                 .font(.system(size: 10.5, weight: .semibold))
                 .tracking(0.8)
             if count > 0 {
-                Text("\(count)")
+                // "12 of 2,367" rather than a bare 12 — the difference between "that's all
+                // there is" and "there is plenty more".
+                Text(total > count ? "\(count) of \(total.formatted())" : "\(count)")
                     .font(.system(size: 10, design: .monospaced))
                     .opacity(0.7)
             }

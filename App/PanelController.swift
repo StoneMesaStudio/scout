@@ -13,6 +13,9 @@ final class SearchPanel: NSPanel {
 @MainActor
 final class PanelController {
 
+    /// Posted when the panel should go back to the size and place it starts at.
+    static let resetGeometryNotification = Notification.Name("ScoutResetPanelGeometry")
+
     private var panel: SearchPanel?
     private let model = SearchModel()
     private let settings = ScoutSettings.shared
@@ -63,7 +66,7 @@ final class PanelController {
     /// heading is sitting over the right rows without looking at the screen.
     private static func label(_ item: PanelItem) -> String {
         switch item {
-        case .header(let lane, let count): "[\(lane.title) \(count)]"
+        case .header(let lane, let count, let total): "[\(lane.title) \(count)/\(total)]"
         case .status(let lane, _): "(\(lane.title): notice)"
         case .row(let row, _):
             switch row {
@@ -74,6 +77,7 @@ final class PanelController {
             case .message: "msg"
             case .contact: "contact"
             }
+        case .showMore(_, let remaining): "(+\(remaining) more)"
         case .hiddenNotice: "(hidden)"
         }
     }
@@ -129,6 +133,14 @@ final class PanelController {
         // The window owns the size; the view fills it.
         panel.contentView = NSHostingView(rootView: SearchRootView(model: model))
 
+        frameObservers.append(NotificationCenter.default.addObserver(
+            forName: Self.resetGeometryNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.resetGeometry() }
+        })
+
         for name in [NSWindow.didResizeNotification, NSWindow.didMoveNotification] {
             let token = NotificationCenter.default.addObserver(
                 forName: name,
@@ -165,6 +177,14 @@ final class PanelController {
         let y = visible.maxY - (visible.height - height) / 2.5 - height
 
         panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: false)
+    }
+
+    /// Forget the remembered frame and lay the panel out from scratch.
+    private func resetGeometry() {
+        settings.panelFrame = nil
+        guard let panel else { return }
+        panel.setContentSize(NSSize(width: defaultWidth, height: minimumSize.height))
+        position(panel)
     }
 
     private func rememberFrame() {
