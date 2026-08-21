@@ -65,7 +65,16 @@ public final class MessageIndex {
 
         guard chat.hasTable("message") else { throw Failure.unexpectedDatabase }
 
-        let since = try highestIndexedRowID(in: index)
+        var since = try highestIndexedRowID(in: index)
+
+        // If the source now has fewer messages than we have already indexed, it is not the same
+        // database — Messages was turned off and on, restored from a backup, or the Mac is new.
+        // Carrying the old watermark forward would mean never indexing anything again.
+        if since > 0, try highestSourceRowID(in: chat) < since {
+            try index.execute("DELETE FROM messages")
+            since = 0
+        }
+
         let rows = try read(from: chat, after: since)
         guard !rows.isEmpty else { return 0 }
 
@@ -205,6 +214,11 @@ public final class MessageIndex {
 
     private func highestIndexedRowID(in index: SQLiteDatabase) throws -> Int64 {
         let statement = try index.prepare("SELECT COALESCE(MAX(rowid), 0) FROM messages")
+        return try statement.step() ? statement.int64(0) : 0
+    }
+
+    private func highestSourceRowID(in chat: SQLiteDatabase) throws -> Int64 {
+        let statement = try chat.prepare("SELECT COALESCE(MAX(ROWID), 0) FROM message")
         return try statement.step() ? statement.int64(0) : 0
     }
 

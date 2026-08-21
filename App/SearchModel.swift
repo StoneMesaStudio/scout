@@ -1,4 +1,5 @@
 import AppKit
+import Contacts
 import Observation
 import ScoutCore
 
@@ -45,6 +46,7 @@ enum PanelItem: Identifiable {
     case status(lane: SearchLane, status: LaneStatus)
     case row(PanelRow, index: Int)
     case showMore(lane: SearchLane, remaining: Int)
+    case indexing(lane: SearchLane, done: Int, total: Int)
     case hiddenNotice(count: Int)
 
     var id: String {
@@ -53,6 +55,7 @@ enum PanelItem: Identifiable {
         case .status(let lane, _): "status:\(lane.rawValue)"
         case .row(let row, let index): "row:\(index):\(row.id)"
         case .showMore(let lane, _): "more:\(lane.rawValue)"
+        case .indexing(let lane, _, _): "indexing:\(lane.rawValue)"
         case .hiddenNotice: "hidden"
         }
     }
@@ -106,6 +109,8 @@ final class SearchModel {
     private(set) var sections: [PanelSection] = []
     /// Exactly what the panel draws, in order.
     private(set) var displayItems: [PanelItem] = []
+    /// How far through reading the mail archive Scout is, while that is still happening.
+    private(set) var mailIndexing: MailBodyIndex.Progress?
     /// How many file matches the exclusions removed, so nothing disappears without a trace.
     private(set) var hiddenCount: Int = 0
 
@@ -177,6 +182,8 @@ final class SearchModel {
     private var messageTask: Task<Void, Never>?
     private var mailTask: Task<Void, Never>?
     private var contactTask: Task<Void, Never>?
+    private var mailIndexTask: Task<Void, Never>?
+    private var selectedRowID: String?
 
     /// How many of each source to show before offering the rest. Files get the room; the others
     /// are there to answer a question, not to fill the panel — but every one of them can be
@@ -202,6 +209,9 @@ final class SearchModel {
     /// Show more of one source. Files, apps and settings are already in hand so they just
     /// re-slice; the other three go back to their store for the next page.
     func showMore(_ lane: SearchLane) {
+        // Selection is an index into a flat list, so growing a section above the cursor would
+        // slide the highlight onto somebody else's row. Remember what was selected, not where.
+        selectedRowID = selectedRow?.id
         laneLimits[lane] = limit(for: lane) + pageSize
         let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -213,7 +223,19 @@ final class SearchModel {
         }
     }
 
+    /// Contacts changing under us — someone added in Contacts.app, or a card edited — otherwise
+    /// would not be findable until the five-minute cache expired.
+    private var contactChangeObserver: NSObjectProtocol?
+
     init() {
+        contactChangeObserver = NotificationCenter.default.addObserver(
+            forName: .CNContactStoreDidChange,
+            object: nil,
+            queue: .main
+        ) { [contacts] _ in
+            Task { await contacts.invalidate() }
+        }
+
         searcher.onResults = { [weak self] results in
             guard let self else { return }
             self.rawFiles = results
@@ -242,6 +264,7 @@ final class SearchModel {
         messageRows = []
         contactRows = []
         sections = []
+        displayItems = []
         hiddenCount = 0
     }
 
@@ -250,6 +273,8 @@ final class SearchModel {
         messageTask?.cancel()
         mailTask?.cancel()
         contactTask?.cancel()
+        // The mail index keeps building across panel closes on purpose: stopping and restarting
+        // it every time would mean never finishing.
         searcher.stop()
     }
 
@@ -281,8 +306,9 @@ final class SearchModel {
             searcher.search(text, scope: scope, folder: focusedFolder)
         }
 
-        if enabledLanes.contains(.mail), query.count >= 2 {
-            searchMail(query)
+        if enabledLanes.contains(.mail) {
+            startMailIndexingIfNeeded()
+            if query.count >= 2 { searchMail(query) }
         }
 
         if enabledLanes.contains(.contacts) {
@@ -344,6 +370,30 @@ final class SearchModel {
         }
     }
 
+    /// Keep reading the mail archive until it is all indexed.
+    ///
+    /// Bounded slices rather than one long run, so the lane answers throughout — the first pass
+    /// over a long archive is tens of thousands of files. Each slice re-searches, so results
+    /// improve while it works instead of only at the end.
+    private func startMailIndexingIfNeeded() {
+        guard settings.searchMailBodies, mailIndexTask == nil else { return }
+
+        mailIndexTask = Task { [mail] in
+            await mail.setBodySearch(true)
+            while !Task.isCancelled {
+                guard let progress = await mail.syncBodies(budget: 1_500) else { break }
+                self.mailIndexing = progress.isComplete ? nil : progress
+
+                if progress.isComplete { break }
+                // Re-run the search so what has been indexed so far is already useful.
+                let query = self.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if query.count >= 2 { self.searchMail(query) }
+            }
+            self.mailIndexing = nil
+            self.mailIndexTask = nil
+        }
+    }
+
     /// Mail's own index is read off the main thread — 46,000 messages is not something to scan
     /// while someone is typing.
     private func searchMail(_ query: String) {
@@ -375,8 +425,10 @@ final class SearchModel {
         let cap = limit(for: .messages)
         messageTask = Task { [messages] in
             await messages.prepare()
-            let state = await messages.currentState()
             let page = await messages.search(query, limit: cap)
+            // Read the state after searching, not before: a damaged index only shows itself when
+            // a query runs, and reading first would report it as ready and empty.
+            let state = await messages.currentState()
             guard !Task.isCancelled else { return }
             self.applyMessages(page, state: state, query: query)
         }
@@ -442,6 +494,9 @@ final class SearchModel {
 
         for section in sections {
             items.append(.header(lane: section.lane, count: section.rows.count, total: section.total))
+            if section.lane == .mail, let progress = mailIndexing {
+                items.append(.indexing(lane: .mail, done: progress.indexed, total: progress.total))
+            }
             if section.status != .ready {
                 items.append(.status(lane: section.lane, status: section.status))
             }
@@ -459,6 +514,17 @@ final class SearchModel {
             items.append(.hiddenNotice(count: hiddenCount))
         }
         displayItems = items
+
+        // Put the highlight back on the row it was on, wherever that row has moved to.
+        if let selectedRowID {
+            for item in items {
+                if case .row(let row, let index) = item, row.id == selectedRowID {
+                    selection = index
+                    break
+                }
+            }
+            self.selectedRowID = nil
+        }
     }
 
     private func fileRows() -> [PanelRow] {
@@ -476,8 +542,11 @@ final class SearchModel {
         laneTotals[.files] = matching.count
         let files = matching.prefix(limit(for: .files)).map { PanelRow.file($0) }
 
-        // The one exact app-name match sits at the very top so Return still launches apps.
+        // The one exact app-name match sits at the very top so Return still launches apps. It is
+        // counted in the total as well, or "remaining" would be short by one and the last file
+        // would have no Show more to reach it.
         if settings.pinExactAppMatch, let app = appIndex.exactMatch(for: text), focusedFolder == nil {
+            laneTotals[.files] = (laneTotals[.files] ?? 0) + 1
             return [.app(app, pinned: true)] + files
         }
         return Array(files)

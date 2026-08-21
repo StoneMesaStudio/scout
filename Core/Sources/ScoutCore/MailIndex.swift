@@ -23,9 +23,15 @@ public final class MailIndex {
     }
 
     private let mailDirectory: URL
+    /// Scout's own index of message bodies, when there is one to consult.
+    private let bodyIndexLocation: URL?
 
-    public init(mailDirectory: URL = MailIndex.defaultDirectory()) {
+    public init(
+        mailDirectory: URL = MailIndex.defaultDirectory(),
+        bodyIndexLocation: URL? = nil
+    ) {
         self.mailDirectory = mailDirectory
+        self.bodyIndexLocation = bodyIndexLocation
     }
 
     public static func defaultDirectory(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
@@ -75,25 +81,43 @@ public final class MailIndex {
 
         let pattern = "%\(Self.escapeForLike(trimmed))%"
 
+        // Attach Scout's body index, if it has been built, so subject, sender and body are one
+        // query — which is the only way the count and the ordering can both be right.
+        var bodyMatch = ""
+        if let bodyIndexLocation, FileManager.default.fileExists(atPath: bodyIndexLocation.path) {
+            let escaped = bodyIndexLocation.path.replacingOccurrences(of: "'", with: "''")
+            if (try? database.execute("ATTACH DATABASE '\(escaped)' AS bodies")) != nil {
+                bodyMatch = """
+                    OR trim(g.message_id_header, '<>') IN (
+                        SELECT message_id FROM bodies.bodies WHERE bodies MATCH ?3
+                    )
+                """
+            }
+        }
+        let ftsQuery = Self.ftsQuery(for: trimmed)
+
         // Subject, sender name and sender address, in one pass. Recipients are a second pass
         // because that join multiplies rows and would otherwise slow down every search for the
         // sake of the rarer case.
         let statement = try database.prepare("""
             SELECT m.ROWID, s.subject, a.comment, a.address, m.date_received, m.date_sent,
-                   b.url, m.message_id, m.read
+                   b.url, g.message_id_header, m.read
             FROM messages m
             LEFT JOIN subjects  s ON s.ROWID = m.subject
             LEFT JOIN addresses a ON a.ROWID = m.sender
             LEFT JOIN mailboxes b ON b.ROWID = m.mailbox
+            LEFT JOIN message_global_data g ON g.message_id = m.ROWID
             WHERE m.deleted = 0
               AND (s.subject LIKE ?1 ESCAPE '\\'
                    OR a.comment LIKE ?1 ESCAPE '\\'
-                   OR a.address LIKE ?1 ESCAPE '\\')
-            ORDER BY \(Self.trashLastClause) ASC, m.date_received DESC
+                   OR a.address LIKE ?1 ESCAPE '\\'
+                   \(bodyMatch))
+            ORDER BY \(Self.trashLastClause) ASC, \(Self.sortDateClause) DESC
             LIMIT ?2
         """)
         statement.bind(pattern, at: 1)
         statement.bind(Int64(limit), at: 2)
+        if !bodyMatch.isEmpty { statement.bind(ftsQuery, at: 3) }
 
         var hits: [MailHit] = []
         while try statement.step() {
@@ -102,23 +126,50 @@ public final class MailIndex {
 
         // Only worth a second pass when the page filled up; otherwise what came back is all
         // there is.
-        let total = hits.count < limit ? hits.count : try Self.count(in: database, pattern: pattern)
+        let total = hits.count < limit
+            ? hits.count
+            : try Self.count(in: database, pattern: pattern, bodyMatch: bodyMatch, ftsQuery: ftsQuery)
         return SearchPage(items: hits, total: total)
     }
 
-    private static func count(in database: SQLiteDatabase, pattern: String) throws -> Int {
+    /// The same WHERE clause as the page, counted. Written from the same pieces on purpose: a
+    /// count that filters differently from the results is worse than no count at all.
+    private static func count(
+        in database: SQLiteDatabase,
+        pattern: String,
+        bodyMatch: String,
+        ftsQuery: String
+    ) throws -> Int {
         let statement = try database.prepare("""
             SELECT COUNT(*)
             FROM messages m
             LEFT JOIN subjects  s ON s.ROWID = m.subject
             LEFT JOIN addresses a ON a.ROWID = m.sender
+            LEFT JOIN mailboxes b ON b.ROWID = m.mailbox
+            LEFT JOIN message_global_data g ON g.message_id = m.ROWID
             WHERE m.deleted = 0
               AND (s.subject LIKE ?1 ESCAPE '\\'
                    OR a.comment LIKE ?1 ESCAPE '\\'
-                   OR a.address LIKE ?1 ESCAPE '\\')
+                   OR a.address LIKE ?1 ESCAPE '\\'
+                   \(bodyMatch))
         """)
         statement.bind(pattern, at: 1)
+        if !bodyMatch.isEmpty { statement.bind(ftsQuery, at: 3) }
         return try statement.step() ? Int(statement.int64(0)) : 0
+    }
+
+    /// Every word quoted so punctuation cannot be read as an FTS operator, with the last word a
+    /// prefix so results appear while still typing.
+    static func ftsQuery(for text: String) -> String {
+        let words = text
+            .components(separatedBy: .whitespacesAndNewlines)
+            .map { $0.replacingOccurrences(of: "\"", with: "") }
+            .filter { !$0.isEmpty }
+
+        guard !words.isEmpty else { return "\"\"" }
+        var terms = words.map { "\"\($0)\"" }
+        terms[terms.count - 1] += "*"
+        return terms.joined(separator: " ")
     }
 
     private static func hit(from statement: SQLiteStatement) -> MailHit {
@@ -138,6 +189,13 @@ public final class MailIndex {
             isUnread: !statement.bool(8)
         )
     }
+
+    /// Sort by the same date the row displays.
+    ///
+    /// A message in Sent, or one not fully synced, has no received date at all — so ordering on
+    /// `date_received` alone buried today's message below ones from a fortnight ago while showing
+    /// today's date beside it.
+    static let sortDateClause = "max(coalesce(m.date_received, 0), coalesce(m.date_sent, 0))"
 
     /// Mail found in the trash or in junk sorts below everything else.
     ///
@@ -160,7 +218,7 @@ public final class MailIndex {
     }
 }
 
-/// Keeps the Mail search off the main thread.
+/// Keeps the Mail search — and the building of the body index — off the main thread.
 public actor MailSearchService {
 
     public enum State: Sendable, Equatable {
@@ -169,16 +227,50 @@ public actor MailSearchService {
         case failed(String)
     }
 
-    private let index: MailIndex
+    private let mailDirectory: URL
+    private let bodies: MailBodyIndex
     private var state: State = .ready
+    private var bodySearchEnabled = true
 
-    public init(mailDirectory: URL = MailIndex.defaultDirectory()) {
-        index = MailIndex(mailDirectory: mailDirectory)
+    public init(
+        mailDirectory: URL = MailIndex.defaultDirectory(),
+        bodyIndexLocation: URL = MailBodyIndex.defaultLocation()
+    ) {
+        self.mailDirectory = mailDirectory
+        bodies = MailBodyIndex(mailDirectory: mailDirectory, location: bodyIndexLocation)
     }
 
     public func currentState() -> State { state }
 
+    public func setBodySearch(_ enabled: Bool) {
+        bodySearchEnabled = enabled
+        if !enabled { bodies.remove() }
+    }
+
+    /// Index another slice of the archive. Returns what is left to do.
+    public func syncBodies(budget: Int = 2_000) -> MailBodyIndex.Progress? {
+        guard bodySearchEnabled else { return nil }
+        return try? bodies.sync(budget: budget)
+    }
+
+    public func bodyProgress() -> MailBodyIndex.Progress? {
+        guard bodySearchEnabled else { return nil }
+        return try? bodies.progress()
+    }
+
+    public func bodyIndexSize() -> Int64 {
+        bodies.sizeOnDisk
+    }
+
+    public func rebuildBodies() {
+        try? bodies.rebuild()
+    }
+
     public func search(_ query: String, limit: Int = 40) -> SearchPage<MailHit> {
+        let index = MailIndex(
+            mailDirectory: mailDirectory,
+            bodyIndexLocation: bodySearchEnabled ? bodies.databaseLocation : nil
+        )
         do {
             let page = try index.search(query, limit: limit)
             state = .ready

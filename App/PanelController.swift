@@ -20,6 +20,9 @@ final class PanelController {
     private let model = SearchModel()
     private let settings = ScoutSettings.shared
     private var frameObservers: [NSObjectProtocol] = []
+    /// True while a reset is moving the window, so the observers that remember the frame do not
+    /// write back the one the reset just cleared.
+    private var isResetting = false
 
     /// How much of the screen the panel takes when it has never been resized. Tall on purpose:
     /// the results are the point, and a panel that only shows the search field looks broken.
@@ -78,6 +81,7 @@ final class PanelController {
             case .contact: "contact"
             }
         case .showMore(_, let remaining): "(+\(remaining) more)"
+        case .indexing(_, let done, let total): "(indexing \(done)/\(total))"
         case .hiddenNotice: "(hidden)"
         }
     }
@@ -159,13 +163,16 @@ final class PanelController {
     /// Put the panel where it was left, or — the first time — centred and tall on whichever screen
     /// the pointer is on. That is the screen the user is looking at, which is not always the one
     /// holding the menu bar.
-    private func position(_ panel: NSPanel) {
+    private func position(_ panel: NSPanel, ignoringSaved: Bool = false) {
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
         guard let visible = screen?.visibleFrame else { return }
 
-        if let saved = settings.panelFrame, visible.intersects(saved), saved.width >= minimumSize.width {
-            panel.setFrame(saved, display: false)
+        if !ignoringSaved, let saved = settings.panelFrame, visible.intersects(saved) {
+            // Clamped to the screen it is opening on. A panel sized for an external display is
+            // taller than a laptop screen, and restoring it unchanged put the search field itself
+            // off the top edge.
+            panel.setFrame(Self.clamp(saved, into: visible, minimum: minimumSize), display: false)
             return
         }
 
@@ -181,14 +188,31 @@ final class PanelController {
 
     /// Forget the remembered frame and lay the panel out from scratch.
     private func resetGeometry() {
+        isResetting = true
+        defer { isResetting = false }
+
         settings.panelFrame = nil
         guard let panel else { return }
-        panel.setContentSize(NSSize(width: defaultWidth, height: minimumSize.height))
-        position(panel)
+        // `position` computes the default size as well as the place, so nothing here needs to
+        // guess at a height — setting the minimum first is how the reset used to collapse the
+        // panel to a strip.
+        position(panel, ignoringSaved: true)
+    }
+
+    /// Fit a remembered frame onto the screen it is opening on.
+    static func clamp(_ frame: NSRect, into visible: NSRect, minimum: NSSize) -> NSRect {
+        var result = frame
+        result.size.width = min(max(minimum.width, result.width), visible.width)
+        result.size.height = min(max(minimum.height, result.height), visible.height)
+        result.origin.x = min(max(visible.minX, result.minX), visible.maxX - result.width)
+        result.origin.y = min(max(visible.minY, result.minY), visible.maxY - result.height)
+        return result
     }
 
     private func rememberFrame() {
-        guard let panel, panel.isVisible else { return }
+        // A reset moves and resizes the window, which fires these same notifications — and
+        // saving from inside one would write back the frame the reset just cleared.
+        guard !isResetting, let panel, panel.isVisible else { return }
         settings.panelFrame = panel.frame
     }
 }

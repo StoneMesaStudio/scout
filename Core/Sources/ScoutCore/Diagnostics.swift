@@ -114,6 +114,53 @@ public enum Diagnostics {
             lines.append("MessageIndex failed: \(error)")
         }
 
+        // Index a slice of the archive and search it, so the body join is exercised on real mail
+        // rather than only on a fixture. Counts only.
+        let bodies = MailBodyIndex(mailDirectory: MailIndex.defaultDirectory(home: home))
+        if let progress = try? bodies.sync(budget: 4_000) {
+            lines.append("")
+            lines.append("BODY INDEX")
+            lines.append("indexed so far: \(progress.indexed), remaining: \(progress.remaining)")
+
+            let withBodies = MailIndex(
+                mailDirectory: MailIndex.defaultDirectory(home: home),
+                bodyIndexLocation: bodies.databaseLocation
+            )
+            if let page = try? withBodies.search(term, limit: 10) {
+                lines.append("mail search including bodies: \(page.items.count) of \(page.total)")
+            }
+        }
+
+        lines.append(contentsOf: emlxShape(home: home))
+        lines.append(contentsOf: contactShape())
+
+        // How Mail writes a Message-ID, so the body index can be keyed to match.
+        if let sample = try? db.prepare("SELECT message_id FROM messages WHERE message_id IS NOT NULL LIMIT 3") {
+            var shapes: [String] = []
+            while (try? sample.step()) == true {
+                let value = sample.string(0) ?? ""
+                shapes.append("len \(value.count), angle brackets: \(value.hasPrefix("<") ? "yes" : "no")")
+            }
+            lines.append("message_id shape: \(shapes.joined(separator: "; "))")
+        }
+
+        if let sample = try? db.prepare("""
+            SELECT message_id_header FROM message_global_data
+            WHERE message_id_header IS NOT NULL AND message_id_header != '' LIMIT 3
+        """) {
+            var shapes: [String] = []
+            while (try? sample.step()) == true {
+                let value = sample.string(0) ?? ""
+                shapes.append("len \(value.count), brackets: \(value.hasPrefix("<") ? "yes" : "no"), has @: \(value.contains("@") ? "yes" : "no")")
+            }
+            lines.append("message_id_header shape: \(shapes.joined(separator: "; "))")
+        }
+
+        if let counter = try? db.prepare("SELECT COUNT(*) FROM message_global_data WHERE message_id_header IS NOT NULL AND message_id_header != ''"),
+           (try? counter.step()) == true {
+            lines.append("messages with an RFC Message-ID recorded: \(counter.int64(0))")
+        }
+
         for table in ["sender_addresses", "senders", "message_global_data", "summaries"] {
             guard let info = try? db.prepare("PRAGMA table_info(\(table))") else { continue }
             var columns: [String] = []
@@ -124,6 +171,66 @@ public enum Diagnostics {
         }
 
         return lines.joined(separator: "\n")
+    }
+
+    /// What a message file looks like on disk, and whether it can be tied back to the index.
+    /// Counts and shapes only — no header values, no body text.
+    private static func emlxShape(home: URL) -> [String] {
+        var lines = ["", "MESSAGE FILES"]
+        let fm = FileManager.default
+        let root = MailIndex.defaultDirectory(home: home)
+
+        var sampled: [URL] = []
+        if let walker = fm.enumerator(at: root, includingPropertiesForKeys: [.fileSizeKey]) {
+            for case let url as URL in walker where url.pathExtension == "emlx" {
+                sampled.append(url)
+                if sampled.count >= 40 { break }
+            }
+        }
+        lines.append("sampled: \(sampled.count)")
+        guard !sampled.isEmpty else { return lines }
+
+        var startsWithByteCount = 0
+        var hasMessageID = 0
+        var numericFilenames = 0
+        var totalBytes = 0
+
+        for url in sampled {
+            numericFilenames += Int(url.deletingPathExtension().lastPathComponent) != nil ? 1 : 0
+            guard let data = try? Data(contentsOf: url, options: [.mappedIfSafe]) else { continue }
+            totalBytes += data.count
+
+            let head = String(decoding: data.prefix(8_192), as: UTF8.self)
+            if let firstLine = head.split(separator: "\n", maxSplits: 1).first,
+               Int(firstLine.trimmingCharacters(in: .whitespaces)) != nil {
+                startsWithByteCount += 1
+            }
+            if head.range(of: "\nMessage-ID:", options: [.caseInsensitive]) != nil
+                || head.hasPrefix("Message-ID:") {
+                hasMessageID += 1
+            }
+        }
+
+        lines.append("filenames that are a number: \(numericFilenames)")
+        lines.append("files starting with a byte count: \(startsWithByteCount)")
+        lines.append("files with a Message-ID header: \(hasMessageID)")
+        lines.append("average size: \(sampled.isEmpty ? 0 : totalBytes / sampled.count) bytes")
+        return lines
+    }
+
+    /// Whether Contacts hands over the note field at all. Counts only — no note text.
+    private static func contactShape() -> [String] {
+        let searcher = ContactSearcher()
+        guard searcher.access == .allowed else { return ["", "CONTACT CARDS", "not allowed to read contacts"] }
+
+        let records = searcher.loadAll()
+        let withNotes = records.filter { $0.hasNote }.count
+        return [
+            "",
+            "CONTACT CARDS",
+            "cards: \(records.count)",
+            "cards whose note came back non-empty: \(withNotes)",
+        ]
     }
 
     public static func report(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {

@@ -32,6 +32,7 @@ final class ScoutSettings {
         enabledLanes = Set(saved ?? [.files, .contacts, .mail, .messages, .apps])
         hasSeenWelcome = store.bool(forKey: Key.hasSeenWelcome)
         hideCommandSpaceHint = store.bool(forKey: Key.hideCommandSpaceHint)
+        searchMailBodies = store.object(forKey: Key.searchMailBodies) as? Bool ?? true
 
         if let saved = store.string(forKey: Key.panelFrame) {
             let rect = NSRectFromString(saved)
@@ -52,6 +53,7 @@ final class ScoutSettings {
         static let hasSeenWelcome = "hasSeenWelcome"
         static let panelFrame = "panelFrame"
         static let hideCommandSpaceHint = "hideCommandSpaceHint"
+        static let searchMailBodies = "searchMailBodies"
     }
 
     /// Which scope the panel opens on.
@@ -94,6 +96,12 @@ final class ScoutSettings {
     /// and a permanent nag about a choice already made is just noise.
     var hideCommandSpaceHint: Bool {
         didSet { store.set(hideCommandSpaceHint, forKey: Key.hideCommandSpaceHint) }
+    }
+
+    /// Search what messages say, not only their subjects and senders. Requires Scout to keep an
+    /// index of its own over the message files, which is built once and then kept up.
+    var searchMailBodies: Bool {
+        didSet { store.set(searchMailBodies, forKey: Key.searchMailBodies) }
     }
 
     /// Where the panel was left, in size and position. Nil until it has been moved or resized

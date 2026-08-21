@@ -21,52 +21,64 @@ public struct ContactIndex: Sendable {
         }
     }
 
+    public var isEmpty: Bool { entries.isEmpty }
+
     public var count: Int { entries.count }
 
     static func fold(_ text: String) -> String {
         text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
     }
 
-    /// Best matches first: a name that starts with the query beats one that merely contains it,
-    /// and a match on a name beats a match on a company, an address or a number.
+    /// Best matches first: a match on someone's name beats their company, which beats their
+    /// address; and a name that starts with the query beats one that merely contains it.
     public func search(_ query: String, limit: Int = 20) -> SearchPage<ContactHit> {
-        let needle = Self.fold(query.trimmingCharacters(in: .whitespacesAndNewlines))
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let needle = Self.fold(trimmed)
         guard needle.count >= 2 else { return .empty }
 
-        let digits = needle.filter(\.isNumber)
-        let searchingForANumber = digits.count >= 3 && digits.count == needle.count
+        // Numbers are matched as well as text, never instead of it. Punctuation is stripped from
+        // the query, so "505 652" and "505-652" find the number that "505652" finds — and a
+        // postcode still finds the address it sits in.
+        let digits = trimmed.filter(\.isNumber)
+        let matchDigits = digits.count >= 3
 
         var scored: [(hit: ContactHit, score: Int)] = []
         for entry in entries {
-            if searchingForANumber {
-                if entry.record.phoneDigits.contains(where: { $0.contains(digits) }) {
-                    scored.append((entry.record.hit, 500))
-                }
-                continue
+            var score = Self.score(entry, needle: needle)
+
+            if score == 0, matchDigits, entry.record.phoneDigits.contains(where: { $0.contains(digits) }) {
+                score = 500
             }
-            guard entry.haystack.contains(needle) else { continue }
-            scored.append((entry.record.hit, Self.score(entry, needle: needle)))
+            guard score > 0 else { continue }
+            scored.append((entry.record.hit, score))
         }
 
         scored.sort { $0.score == $1.score ? $0.hit.name < $1.hit.name : $0.score > $1.score }
         return SearchPage(items: Array(scored.prefix(limit).map(\.hit)), total: scored.count)
     }
 
-    private static func score(_ entry: Entry, needle: String) -> Int {
-        let name = fold(entry.record.hit.name)
+    /// Zero means no match at all.
+    static func score(_ entry: Entry, needle: String) -> Int {
         let separators = CharacterSet(charactersIn: " -_.'")
 
-        if name == needle { return 1000 }
-        if name.components(separatedBy: separators).contains(where: { $0.hasPrefix(needle) }) { return 800 }
-        if name.contains(needle) { return 600 }
-
-        // A name field that isn't the displayed one — the person's first name on a card filed
-        // under their company.
-        let names = entry.record.searchable.prefix(8).map(fold)
-        if names.contains(where: { $0.components(separatedBy: separators).contains(where: { $0.hasPrefix(needle) }) }) {
-            return 500
+        func words(_ text: String) -> [String] {
+            fold(text).components(separatedBy: separators)
         }
-        if let organization = entry.record.hit.organization, fold(organization).contains(needle) { return 400 }
+
+        // Name fields only — the displayed name is skipped, because for a card with no name at
+        // all it is the placeholder "No name", and matching that floats blank cards to the top.
+        for field in entry.record.nameFields {
+            let folded = fold(field)
+            if folded == needle { return 1000 }
+            if words(field).contains(where: { $0.hasPrefix(needle) }) { return 800 }
+            if folded.contains(needle) { return 600 }
+        }
+
+        for field in entry.record.workFields where fold(field).contains(needle) {
+            return 400
+        }
+
+        guard entry.haystack.contains(needle) else { return 0 }
         return 200
     }
 }
@@ -102,7 +114,14 @@ public actor ContactSearchService {
         guard searcher.access == .allowed else { return .empty }
 
         if index == nil || loadedAt.map({ now.timeIntervalSince($0) > staleAfter }) ?? true {
-            index = ContactIndex(records: searcher.loadAll())
+            let loaded = ContactIndex(records: searcher.loadAll())
+            // An empty result is only cached when the address book really is empty. Otherwise the
+            // store failed — busy just after launch, or just after access was granted — and
+            // caching that would answer "no contacts" for the next five minutes.
+            if loaded.isEmpty, searcher.loadFailed() {
+                return .empty
+            }
+            index = loaded
             loadedAt = now
         }
         return index?.search(query, limit: limit) ?? .empty

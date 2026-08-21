@@ -4,7 +4,7 @@ import Foundation
 
 /// Builds an Envelope Index shaped like Mail's own, so the query is exercised against the same
 /// tables and joins it will meet on a real Mac.
-private func makeEnvelopeIndex(
+func makeEnvelopeIndex(
     at directory: URL,
     messages: [(id: Int64, subject: String, senderName: String, senderAddress: String, mailbox: String, received: Int64, messageID: String, read: Bool, deleted: Bool)]
 ) throws {
@@ -20,6 +20,7 @@ private func makeEnvelopeIndex(
             ROWID INTEGER PRIMARY KEY, message_id TEXT, subject INTEGER, sender INTEGER,
             mailbox INTEGER, date_received INTEGER, date_sent INTEGER, read INTEGER, deleted INTEGER
         );
+        CREATE TABLE message_global_data (ROWID INTEGER PRIMARY KEY, message_id INTEGER, message_id_header TEXT);
     """)
 
     for (index, message) in messages.enumerated() {
@@ -51,6 +52,14 @@ private func makeEnvelopeIndex(
         insert.bind(message.read ? 1 : 0, at: 5)
         insert.bind(message.deleted ? 1 : 0, at: 6)
         try insert.step()
+
+        // Mail keeps the real RFC Message-ID in a table separate from the one it joins on.
+        let globalSQL = "INSERT INTO message_global_data (ROWID, message_id, message_id_header)"
+            + " VALUES (?1, ?1, ?2)"
+        let insertGlobal = try db.prepare(globalSQL)
+        insertGlobal.bind(message.id, at: 1)
+        insertGlobal.bind(message.messageID, at: 2)
+        try insertGlobal.step()
     }
 }
 
@@ -201,5 +210,33 @@ private let received: Int64 = 1_770_000_000
         ])
         let hits = try MailIndex(mailDirectory: directory).search("service").items
         #expect(hits.map(\.mailbox) == ["Archive", "Deleted Messages"])
+    }
+}
+
+@Suite struct MailSortTests {
+
+    @Test func aSentMessageWithNoReceivedDateStillSortsByItsDate() throws {
+        // Sent mail and anything not fully synced has date_received = 0. Ordering on that alone
+        // buried today's message below ones a fortnight older, while showing today's date on it.
+        let directory = temporaryDirectory()
+        try makeEnvelopeIndex(at: directory, messages: [
+            (1, "invoice old", "A", "a@b.com", "imap://x/Archive", received, "<a@b>", true, false),
+        ])
+
+        let db = try SQLiteDatabase.openOrCreate(directory.appending(path: "V10/MailData/Envelope Index"))
+        try db.execute("INSERT INTO subjects (ROWID, subject) VALUES (99, 'invoice sent today')")
+        try db.execute("INSERT INTO addresses (ROWID, address, comment) VALUES (99, 'me@x.com', 'Me')")
+        try db.execute("INSERT INTO mailboxes (ROWID, url) VALUES (99, 'imap://x/Sent')")
+        try db.execute("""
+            INSERT INTO messages (ROWID, message_id, subject, sender, mailbox, date_received, date_sent, read, deleted)
+            VALUES (99, '<z@z>', 99, 99, 99, 0, \(received + 1_000_000), 1, 0)
+        """)
+
+        // Mail's index is read with `immutable=1`, which by design ignores the write-ahead log —
+        // so these rows have to be folded into the database file before they can be seen.
+        try db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+        let hits = try MailIndex(mailDirectory: directory).search("invoice").items
+        #expect(hits.first?.subject == "invoice sent today")
     }
 }

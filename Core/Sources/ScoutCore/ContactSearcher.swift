@@ -43,13 +43,31 @@ public struct ContactRecord: Sendable {
     public let hit: ContactHit
     /// Every string on the card worth matching against.
     public let searchable: [String]
+    /// Just the name fields — given, middle, family, previous, nickname. Kept apart from the rest
+    /// so a street called Brewster is not ranked as if it were somebody's name.
+    public let nameFields: [String]
+    /// Company, department and job title.
+    public let workFields: [String]
     /// Just the digits of every number, so "6522909" finds "1 (505) 652-2909".
     public let phoneDigits: [String]
+    /// Whether the card has a note. macOS gates note access behind an entitlement Apple grants
+    /// on request, so this is often false even when a note plainly exists.
+    public let hasNote: Bool
 
-    public init(hit: ContactHit, searchable: [String], phoneDigits: [String]) {
+    public init(
+        hit: ContactHit,
+        searchable: [String],
+        phoneDigits: [String],
+        nameFields: [String] = [],
+        workFields: [String] = [],
+        hasNote: Bool = false
+    ) {
         self.hit = hit
         self.searchable = searchable
         self.phoneDigits = phoneDigits
+        self.nameFields = nameFields
+        self.workFields = workFields
+        self.hasNote = hasNote
     }
 }
 
@@ -97,6 +115,23 @@ public struct ContactSearcher: Sendable {
         ]
     }
 
+    /// True when the store could not be read at all, as opposed to being genuinely empty — so a
+    /// transient failure is retried rather than cached as "you have no contacts".
+    public func loadFailed() -> Bool {
+        guard access == .allowed else { return false }
+        let request = CNContactFetchRequest(keysToFetch: [CNContactIdentifierKey as CNKeyDescriptor])
+        do {
+            var seen = false
+            try CNContactStore().enumerateContacts(with: request) { _, stop in
+                seen = true
+                stop.pointee = true
+            }
+            return !seen
+        } catch {
+            return true
+        }
+    }
+
     /// Every contact, as records we can search ourselves.
     ///
     /// Apple's `predicateForContacts(matchingName:)` was the obvious route and it is wrong in both
@@ -125,13 +160,13 @@ public struct ContactSearcher: Sendable {
                 .joined(separator: " ")
         }
 
-        // Note is fetched but not searched: it is where people keep things they would not expect
-        // a search box to surface.
         let names = [
             contact.givenName, contact.middleName, contact.familyName,
             contact.previousFamilyName, contact.nickname,
-            contact.organizationName, contact.departmentName, contact.jobTitle,
-        ]
+        ].filter { !$0.isEmpty }
+
+        let work = [contact.organizationName, contact.departmentName, contact.jobTitle]
+            .filter { !$0.isEmpty }
 
         let hit = ContactHit(
             identifier: contact.identifier,
@@ -141,10 +176,15 @@ public struct ContactSearcher: Sendable {
             email: emails.first
         )
 
+        let note = (try? contact.isKeyAvailable(CNContactNoteKey)) == true ? contact.note : ""
+
         return ContactRecord(
             hit: hit,
-            searchable: (names + phones + emails + addresses).filter { !$0.isEmpty },
-            phoneDigits: phones.map { $0.filter(\.isNumber) }.filter { !$0.isEmpty }
+            searchable: (names + work + phones + emails + addresses + [note]).filter { !$0.isEmpty },
+            phoneDigits: phones.map { $0.filter(\.isNumber) }.filter { !$0.isEmpty },
+            nameFields: names,
+            workFields: work,
+            hasNote: !note.isEmpty
         )
     }
 

@@ -75,6 +75,13 @@ public actor MessageSearchService {
     }
 
     public func search(_ query: String, limit: Int = 60) -> SearchPage<MessageHit> {
-        (try? index.search(query, limit: limit)) ?? .empty
+        do {
+            return try index.search(query, limit: limit)
+        } catch {
+            // Reported rather than swallowed. A damaged index used to render as "no matches",
+            // which is the one answer a search must never give when it did not actually look.
+            state = .failed(error.localizedDescription)
+            return .empty
+        }
     }
 }

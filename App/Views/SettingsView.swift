@@ -74,6 +74,16 @@ private struct GeneralSettings: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Mail") {
+                Toggle("Search what messages say, not just subjects and senders",
+                       isOn: $settings.searchMailBodies)
+                Text("Mail keeps no searchable copy of message text for other apps, so Scout builds one — reading each message once, then keeping up as mail arrives. Turning this off deletes it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                MailIndexStatus(enabled: settings.searchMailBodies)
+            }
+
             Section {
                 Toggle("Start Scout when I log in", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, wanted in
@@ -91,6 +101,66 @@ private struct GeneralSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// How far along the mail index is, and a way to start it over.
+private struct MailIndexStatus: View {
+
+    let enabled: Bool
+
+    @State private var progress: MailBodyIndex.Progress?
+    @State private var size: Int64 = 0
+    @State private var working = false
+
+    private let service = MailSearchService()
+    private let heartbeat = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        Group {
+            if !enabled {
+                EmptyView()
+            } else if let progress, !progress.isComplete {
+                HStack(spacing: 8) {
+                    ProgressView(value: Double(progress.indexed), total: Double(max(1, progress.total)))
+                        .frame(width: 140)
+                    Text("\(progress.indexed.formatted()) of \(progress.total.formatted()) messages read")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if let progress {
+                HStack(spacing: 8) {
+                    Label("\(progress.indexed.formatted()) messages indexed", systemImage: "checkmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                    if size > 0 {
+                        Text("· \(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Build again") {
+                        working = true
+                        Task {
+                            await service.rebuildBodies()
+                            await refresh()
+                            working = false
+                        }
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                    .disabled(working)
+                }
+            }
+        }
+        .task { await refresh() }
+        .onReceive(heartbeat) { _ in Task { await refresh() } }
+    }
+
+    private func refresh() async {
+        await service.setBodySearch(enabled)
+        progress = await service.bodyProgress()
+        size = await service.bodyIndexSize()
     }
 }
 

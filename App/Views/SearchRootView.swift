@@ -193,6 +193,17 @@ struct SearchRootView: View {
                     model.activate()
                 }
 
+        case .indexing(_, let done, let total):
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Reading your mail so it can be searched by what it says — \(done.formatted()) of \(total.formatted())")
+                Spacer()
+            }
+            .font(.system(size: 11.5))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+
         case .showMore(let lane, let remaining):
             Button {
                 model.showMore(lane)

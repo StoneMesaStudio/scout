@@ -211,7 +211,9 @@ private func folder(_ path: String, modified: Date? = nil) -> SearchResult {
         return ContactRecord(
             hit: hit,
             searchable: [name, organization, phone, email].compactMap(\.self),
-            phoneDigits: [(phone ?? "").filter(\.isNumber)].filter { !$0.isEmpty }
+            phoneDigits: [(phone ?? "").filter(\.isNumber)].filter { !$0.isEmpty },
+            nameFields: [name],
+            workFields: [organization].compactMap(\.self)
         )
     }
 
@@ -247,8 +249,56 @@ private func folder(_ path: String, modified: Date? = nil) -> SearchResult {
     }
 
     @Test func anEmailAddressCountsButRanksBelowANameOrCompany() {
-        // JLC Plumbing only matches through its address, so it comes last.
+        // JLC Plumbing here only matches through its address, so it comes last.
         #expect(index.search("Jose").items.map(\.name).last == "JLC Plumbing")
+    }
+
+    @Test func aPhoneNumberTypedTheWayPeopleTypeItStillMatches() {
+        // Spaces, dashes and brackets are how anyone would type part of a number.
+        let index = ContactIndex(records: [contact("Joseph 72 Colinas", phone: "1 (505) 652-2909")])
+        #expect(index.search("505 652").items.count == 1)
+        #expect(index.search("505-652").items.count == 1)
+        #expect(index.search("6522909").items.count == 1)
+    }
+
+    @Test func aNumberInTheTextIsStillFoundByText() {
+        // A postcode is digits, but it lives in an address, not a phone number.
+        let record = ContactRecord(
+            hit: ContactHit(identifier: "A", name: "Ann Reed", organization: nil, phone: "(212) 555-0100", email: nil),
+            searchable: ["Ann Reed", "12 Vine St Santa Fe NM 87501"],
+            phoneDigits: ["2125550100"],
+            nameFields: ["Ann", "Reed"]
+        )
+        #expect(ContactIndex(records: [record]).search("87501").items.count == 1)
+    }
+
+    @Test func aCardWithNoNameDoesNotFloatToTheTop() {
+        // "No name" is a placeholder Scout writes, not something anyone is called.
+        let nameless = ContactRecord(
+            hit: ContactHit(identifier: "X", name: "No name", organization: nil,
+                            phone: nil, email: "noreply@school.edu"),
+            searchable: ["noreply@school.edu"],
+            phoneDigits: []
+        )
+        let index = ContactIndex(records: [nameless, contact("Nora Vance")])
+        #expect(index.search("no").items.first?.name == "Nora Vance")
+    }
+
+    @Test func aStreetNameIsNotRankedAsAPersonsName() {
+        let street = ContactRecord(
+            hit: ContactHit(identifier: "A", name: "Aaron Fox", organization: nil, phone: nil, email: nil),
+            searchable: ["Aaron", "Fox", "5 Brewster Ave"],
+            phoneDigits: [],
+            nameFields: ["Aaron", "Fox"]
+        )
+        let employer = ContactRecord(
+            hit: ContactHit(identifier: "D", name: "Dana West", organization: "Ironbrew Coffee", phone: nil, email: nil),
+            searchable: ["Dana", "West", "Ironbrew Coffee"],
+            phoneDigits: [],
+            nameFields: ["Dana", "West"],
+            workFields: ["Ironbrew Coffee"]
+        )
+        #expect(ContactIndex(records: [street, employer]).search("brew").items.first?.name == "Dana West")
     }
 
     @Test func aCompanyIsSearchableToo() {
@@ -272,7 +322,9 @@ private func folder(_ path: String, modified: Date? = nil) -> SearchResult {
             hit: ContactHit(identifier: "JLC", name: "JLC Plumbing", organization: "JLC Plumbing",
                             phone: "(505) 795-6188", email: nil),
             searchable: ["Jose", "JLC Plumbing", "(505) 795-6188"],
-            phoneDigits: ["5057956188"]
+            phoneDigits: ["5057956188"],
+            nameFields: ["Jose"],
+            workFields: ["JLC Plumbing"]
         )
         let index = ContactIndex(records: [record])
         #expect(index.search("Jose").items.map(\.name) == ["JLC Plumbing"])
