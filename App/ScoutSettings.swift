@@ -43,8 +43,10 @@ final class ScoutSettings {
         enabledLanes = lanes
         laneOrder = SearchLane.ordered(from: store.stringArray(forKey: Key.laneOrder) ?? [])
         resultsPerSource = store.object(forKey: Key.resultsPerSource) as? Int ?? Self.defaultResultsPerSource
+        // Icons alone by default: the discs wear their app's real icon, which names them better
+        // than a word would, and the name is a tooltip away.
         sourceButtonStyle = SourceButtonStyle(rawValue: store.string(forKey: Key.sourceButtonStyle) ?? "")
-            ?? .iconAndText
+            ?? .iconOnly
         hasSeenWelcome = store.bool(forKey: Key.hasSeenWelcome)
         hideCommandSpaceHint = store.bool(forKey: Key.hideCommandSpaceHint)
         searchMailBodies = store.object(forKey: Key.searchMailBodies) as? Bool ?? true

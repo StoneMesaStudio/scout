@@ -45,10 +45,12 @@ is done, and what is done is still findable.
 
 Results never blend across lanes. A file search returns files.
 
-**Arranging them** — drag the source buttons into any order and the result sections follow; the
-number on a button is where it sits, so ⌘1 is whatever you put first. ⌘0 turns them all on, then
-all off — zero sources is a real state, and it is the quick way to get down to one. Right-click
-the buttons for icons, labels, or both, the way Mail's toolbar does.
+**Arranging them** — the sources live in one capsule under the field, each wearing the real icon
+of the app it reads from, asked of the system so it stays right through an OS update. A source
+that is off goes grey; one that is on keeps its colour and gains a whisper of a plate. Drag them
+into any order and the result sections follow; the number on a disc is where it sits, so ⌘1 is
+whatever you put first. ⌘0 turns them all on, then all off — zero sources is a real state, and it
+is the quick way down to one. Right-click for icons, labels, or both, the way Mail's toolbar does.
 
 **Getting through a long list** — every heading carries a *Show only Mail* link that drops the
 other seven and opens that one out. ⌥↑ and ⌥↓ jump from section to section. How many each source

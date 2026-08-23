@@ -122,7 +122,7 @@ struct SearchRootView: View {
             // whichever sources happen to be last.
             SourceStrip(model: model, style: settings.sourceButtonStyle)
 
-            allOrNoneButton
+            Spacer(minLength: 8)
             scopeControl
         }
         .padding(.horizontal, 17)
@@ -142,28 +142,6 @@ struct SearchRootView: View {
             Divider()
             Button("Put the Sources Back in Order") { model.resetLaneOrder() }
         }
-    }
-
-    /// One button, two jobs. Everything off is a real state — it is how you get to a single
-    /// source in two clicks instead of seven.
-    private var allOrNoneButton: some View {
-        Button {
-            model.setAllLanes(!model.allLanesAreOn)
-        } label: {
-            Text(model.allLanesAreOn ? "None" : "All")
-                .font(.system(size: 12, weight: .medium))
-                .frame(minWidth: 34)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .frame(minHeight: 28)
-                .foregroundStyle(.secondary)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.18))
-                }
-        }
-        .buttonStyle(.plain)
-        .help(model.allLanesAreOn ? "⌘0 — turn every source off" : "⌘0 — turn every source on")
     }
 
     /// The scope switch sits in the panel itself, not behind a menu — reaching it has to be
@@ -522,10 +500,14 @@ private struct SourceFramesKey: PreferenceKey {
 
 /// The row of source switches, which is also the row you rearrange.
 ///
+/// One capsule holding eight discs, in the register of Spotlight's own toolbar. Each disc wears
+/// the real icon of the app it reads from, and that is what lets the control be this quiet: a
+/// source that is off goes grey, so the plate behind an active one only has to whisper — a soft
+/// change of ground and a hairline. No fills, no blue block across the top of the panel.
+///
 /// One gesture does both jobs. `.draggable` on a `Button` does not work here — the button claims
 /// the press and the drag never starts — so there is no button: a press that never travels more
-/// than a few points is a click, and one that does is a drag. Sources shuffle out of the way as
-/// the dragged one passes over them, rather than waiting for a drop.
+/// than a few points is a click, and one that does is a drag.
 private struct SourceStrip: View {
 
     @Bindable var model: SearchModel
@@ -534,27 +516,48 @@ private struct SourceStrip: View {
     private static let space = "sourceStrip"
     /// How far the mouse has to travel before a click becomes a drag.
     private static let threshold: CGFloat = 5
+    private static let spacing: CGFloat = 2
+    private static let slotHeight: CGFloat = 36
 
     @State private var frames: [SearchLane: CGRect] = [:]
     @State private var dragged: SearchLane?
-    /// Where the dragged button started. Held fixed for the whole drag: measuring against its
-    /// live frame made it chase a target that the reorder kept moving, which is the shake.
+    /// Where the dragged disc started. Held fixed for the whole drag: measuring against its live
+    /// frame made it chase a target the reorder kept moving, which is the shake.
     @State private var home: CGRect?
     @State private var offset: CGSize = .zero
-    /// The gap the button will drop into, drawn as a solid line.
+    /// The gap the disc will drop into, drawn as a solid line.
     @State private var insertion: Int?
 
-    private static let spacing: CGFloat = 7
-
     var body: some View {
+        HStack(spacing: 0) {
+            slots
+            Rectangle()
+                .fill(Color.primary.opacity(0.12))
+                .frame(width: 1, height: 20)
+                .padding(.horizontal, 4)
+            allOrNone
+        }
+        .padding(5)
+        .background {
+            // The capsule the discs sit in: one control rather than eight, which is also the
+            // thing that makes dragging inside it read as rearranging rather than throwing away.
+            Capsule(style: .continuous)
+                .fill(Color.primary.opacity(0.05))
+                .overlay(Capsule(style: .continuous).strokeBorder(Color.primary.opacity(0.12)))
+                .shadow(color: .black.opacity(0.06), radius: 1, y: 0.5)
+        }
+    }
+
+    private var slots: some View {
         SourceFlow(spacing: Self.spacing) {
             ForEach(model.orderedLanes) { lane in
-                SourceButton(
+                SourceSlot(
                     lane: lane,
                     number: model.number(for: lane),
                     style: style,
                     isOn: model.enabledLanes.contains(lane),
-                    isDragging: dragged == lane
+                    isDragging: dragged == lane,
+                    height: Self.slotHeight
                 )
                 .background(
                     GeometryReader { geometry in
@@ -572,48 +575,29 @@ private struct SourceStrip: View {
         .coordinateSpace(name: Self.space)
         .onPreferenceChange(SourceFramesKey.self) { frames = $0 }
         // Nothing reorders until the mouse comes up. What moves during the drag is this line,
-        // which says exactly where the button is going to land.
+        // which says exactly where the disc is going to land.
         .overlay(alignment: .topLeading) {
             if let insertion, let bar = insertionBar(at: insertion) {
                 Capsule()
                     .fill(Color.accentColor)
-                    .frame(width: 3, height: bar.height)
+                    .frame(width: 2.5, height: bar.height)
                     .offset(x: bar.minX, y: bar.minY)
                     .transition(.opacity)
             }
         }
     }
 
-    /// Which gap between buttons the cursor is closest to, counted left to right along whichever
-    /// row it is over.
-    private func insertionIndex(at point: CGPoint) -> Int? {
-        let lanes = model.orderedLanes
-        let row = lanes.enumerated().filter { _, lane in
-            guard let frame = frames[lane] else { return false }
-            return point.y >= frame.minY && point.y <= frame.maxY
-        }
-        guard !row.isEmpty else { return nil }
-
-        for (index, lane) in row {
-            guard let frame = frames[lane] else { continue }
-            if point.x < frame.midX { return index }
-        }
-        return row.last.map { $0.offset + 1 }
-    }
-
-    /// Where to draw the line for a given gap: down the middle of the space between two buttons,
-    /// or just off the end of the row.
-    private func insertionBar(at index: Int) -> CGRect? {
-        let lanes = model.orderedLanes
-        guard !lanes.isEmpty else { return nil }
-
-        if index < lanes.count, let frame = frames[lanes[index]] {
-            return CGRect(x: frame.minX - Self.spacing / 2 - 1.5, y: frame.minY,
-                          width: 3, height: frame.height)
-        }
-        guard let last = lanes.last, let frame = frames[last] else { return nil }
-        return CGRect(x: frame.maxX + Self.spacing / 2 - 1.5, y: frame.minY,
-                      width: 3, height: frame.height)
+    /// Everything off is a real state — it is how you get down to one source in two clicks
+    /// instead of seven.
+    private var allOrNone: some View {
+        Text(model.allLanesAreOn ? "None" : "All")
+            .font(.system(size: 11.5, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .frame(height: Self.slotHeight)
+            .padding(.horizontal, 9)
+            .contentShape(Rectangle())
+            .onTapGesture { model.setAllLanes(!model.allLanesAreOn) }
+            .help(model.allLanesAreOn ? "⌘0 — turn every source off" : "⌘0 — turn every source on")
     }
 
     private func gesture(for lane: SearchLane) -> some Gesture {
@@ -648,73 +632,108 @@ private struct SourceStrip: View {
                 }
             }
     }
+
+    /// Which gap between discs the cursor is closest to, counted left to right along whichever
+    /// row it is over.
+    private func insertionIndex(at point: CGPoint) -> Int? {
+        let lanes = model.orderedLanes
+        let row = lanes.enumerated().filter { _, lane in
+            guard let frame = frames[lane] else { return false }
+            return point.y >= frame.minY && point.y <= frame.maxY
+        }
+        guard !row.isEmpty else { return nil }
+
+        for (index, lane) in row {
+            guard let frame = frames[lane] else { continue }
+            if point.x < frame.midX { return index }
+        }
+        return row.last.map { $0.offset + 1 }
+    }
+
+    /// Where to draw the line for a given gap: down the middle of the space between two discs,
+    /// or just off the end of the row.
+    private func insertionBar(at index: Int) -> CGRect? {
+        let lanes = model.orderedLanes
+        guard !lanes.isEmpty else { return nil }
+
+        if index < lanes.count, let frame = frames[lanes[index]] {
+            return CGRect(x: frame.minX - Self.spacing / 2 - 1.25, y: frame.minY,
+                          width: 2.5, height: frame.height)
+        }
+        guard let last = lanes.last, let frame = frames[last] else { return nil }
+        return CGRect(x: frame.maxX + Self.spacing / 2 - 1.25, y: frame.minY,
+                      width: 2.5, height: frame.height)
+    }
 }
 
-/// A source switch. Drawn as a real button — raised, bordered, and obviously filled when on —
-/// because a row of bare words does not read as something you can press.
-private struct SourceButton: View {
+/// One source, wearing its app's own icon.
+private struct SourceSlot: View {
 
     let lane: SearchLane
     let number: Int?
     let style: SourceButtonStyle
     let isOn: Bool
     let isDragging: Bool
+    let height: CGFloat
 
     @State private var hovering = false
 
+    private var isCircular: Bool { style == .iconOnly }
+
     var body: some View {
-        Group {
-            HStack(spacing: 6) {
-                if style.showsIcon {
-                    Image(systemName: lane.symbol)
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                if style.showsText {
-                    Text(lane.title)
-                        .font(.system(size: 13, weight: .medium))
-                }
+        HStack(spacing: 6) {
+            if style.showsIcon {
+                LaneIconView(lane: lane, isOn: isOn, size: 22)
             }
-            .padding(.horizontal, style == .iconOnly ? 9 : 12)
-            .padding(.vertical, 6)
-            .frame(minHeight: 28)
-            // Outline only, on the same ground as the search field. These are a control strip,
-            // not the content — filled buttons made the top of the panel louder than the results
-            // underneath, which is the wrong way round. A whisper of fill appears on hover, so
-            // the buttons still answer the mouse.
-            .background {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(hovering ? Color.primary.opacity(0.06) : .clear)
+            if style.showsText {
+                Text(lane.title)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(isOn ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
             }
-            .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(isOn ? Color.accentColor.opacity(0.85) : Color.primary.opacity(0.18),
-                                  lineWidth: 1)
-            }
-            .foregroundStyle(isOn ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
-            // Lifted off the row while it is being carried, so it is obvious which one is moving.
-            .shadow(color: .black.opacity(isDragging ? 0.3 : 0),
-                    radius: isDragging ? 6 : 0, y: isDragging ? 3 : 0)
-            .scaleEffect(isDragging ? 1.05 : 1)
         }
-        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .frame(width: isCircular ? height : nil, height: height)
+        .padding(.horizontal, isCircular ? 0 : 10)
+        // On is a whisper: a shade of ground and a hairline. The colour of the icon is what
+        // actually says the source is running.
+        .background {
+            // Branched rather than erased to `AnyShape`: only an insettable shape can draw a
+            // border that sits inside its own edge, and an erased one cannot.
+            if isCircular {
+                Circle()
+                    .fill(plate)
+                    .overlay(Circle().strokeBorder(hairline, lineWidth: 1))
+            } else {
+                Capsule(style: .continuous)
+                    .fill(plate)
+                    .overlay(Capsule(style: .continuous).strokeBorder(hairline, lineWidth: 1))
+            }
+        }
+        .contentShape(Rectangle())
+        .scaleEffect(isDragging ? 1.08 : 1)
+        .shadow(color: .black.opacity(isDragging ? 0.28 : 0), radius: isDragging ? 5 : 0, y: isDragging ? 2 : 0)
         .onHover { hovering = $0 }
         .help(helpText)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(Text(lane.title))
+        .accessibilityValue(Text(isOn ? "on" : "off"))
     }
 
+    private var plate: Color {
+        Color.primary.opacity(isOn ? 0.06 : (hovering ? 0.04 : 0))
+    }
+
+    private var hairline: Color {
+        Color.primary.opacity(isOn ? 0.16 : 0)
+    }
+
+    /// The names live here now, so the tooltip leads with the name rather than the shortcut.
     private var helpText: String {
-        let key = number.map { "⌘\($0) — " } ?? ""
-        return key + "turn \(lane.title) \(isOn ? "off" : "on"). Drag to reorder."
+        let key = number.map { " · ⌘\($0)" } ?? ""
+        return "\(lane.title)\(key) — click to turn \(isOn ? "off" : "on"), drag to reorder"
     }
 }
 
-/// The band that starts a section.
-///
-/// Deliberately loud. With eight sources running at once the panel is one long column, and a thin
-/// grey line does not tell the eye where Mail stopped and Notes began — so each source gets its
-/// own colour, its own count, and the two ways out of a long list right there in the band.
 private struct SectionHeader: View {
 
     let lane: SearchLane
