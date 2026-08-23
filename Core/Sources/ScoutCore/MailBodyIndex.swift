@@ -6,10 +6,22 @@ import Foundation
 /// searching it finds 26 messages for a name where Mail itself finds 2,367. The bodies live in
 /// the message files on disk, one per message, so this reads them and keeps an index of its own.
 ///
-/// Two deliberate limits. Only the first 64 KB of each file is read: text parts come before
-/// attachments in a MIME message, so that catches the words while skipping the megabytes. And
-/// each message is stored under its RFC Message-ID rather than its file path, because Mail moves
+/// Two limits, widened on 2026-08-23. 256 KB of each file is read and 48,000 characters of text
+/// are kept from it. The first pass used 64 KB and 16,000, and searching "jose" found 1,606
+/// messages where Mail itself finds 2,367 — the gap being text that sits past the read window in
+/// long or image-heavy messages, and text past the keep limit in long ones.
+///
+/// Both limits exist because a MIME message puts its text parts before its attachments, so a
+/// bounded read catches the words while skipping the megabytes. What neither fixes is text inside
+/// attachments, which Scout does not read at all; that is the rest of the gap.
+///
+/// Each message is stored under its RFC Message-ID rather than its file path, because Mail moves
 /// files between mailboxes and the ID does not change.
+///
+/// **Changing either limit invalidates every row.** The values are recorded in the index and
+/// checked when it opens; if they differ, the index empties itself and the next sync reads the
+/// archive again. Leaving old rows in place would mean a search silently covering some messages
+/// to 64 KB and others to 256 KB, with no way to tell which.
 public final class MailBodyIndex {
 
     public struct Progress: Sendable, Equatable {
@@ -21,9 +33,9 @@ public final class MailBodyIndex {
     }
 
     /// How much of each message file to read.
-    static let readLimit = 64 * 1024
+    static let readLimit = 256 * 1024
     /// How much text to keep from one message.
-    static let bodyLimit = 16_000
+    static let bodyLimit = 48_000
 
     private let mailDirectory: URL
     private let location: URL
@@ -320,8 +332,38 @@ public final class MailBodyIndex {
                 tokenize = 'unicode61 remove_diacritics 2'
             );
             CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS limits(key TEXT PRIMARY KEY, value INTEGER);
         """)
+        try emptyIfLimitsChanged(database)
         index = database
         return database
+    }
+
+    /// Rows read under a different pair of limits are not comparable to rows read under these, so
+    /// when the limits move the index starts again rather than becoming a mixture.
+    ///
+    /// This empties the tables instead of deleting the file, so the settings screen's progress
+    /// goes back to zero and climbs — a database that vanishes and reappears looks like a fault.
+    private func emptyIfLimitsChanged(_ database: SQLiteDatabase) throws {
+        let wanted: [(String, Int64)] = [("read", Int64(Self.readLimit)), ("body", Int64(Self.bodyLimit))]
+
+        var matches = true
+        for (key, value) in wanted {
+            let statement = try database.prepare("SELECT value FROM limits WHERE key = ?1")
+            statement.bind(key, at: 1)
+            let stored = try statement.step() ? statement.int64(0) : -1
+            if stored != value { matches = false }
+        }
+        guard !matches else { return }
+
+        try database.execute("DELETE FROM bodies")
+        try database.execute("DELETE FROM files")
+        let write = try database.prepare("INSERT OR REPLACE INTO limits(key, value) VALUES (?1, ?2)")
+        for (key, value) in wanted {
+            write.reset()
+            write.bind(key, at: 1)
+            write.bind(value, at: 2)
+            try write.step()
+        }
     }
 }

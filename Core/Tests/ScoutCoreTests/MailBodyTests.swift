@@ -32,6 +32,48 @@ private func writeMessage(
     try file.write(to: mailbox.appending(path: "\(name).emlx"), atomically: true, encoding: .utf8)
 }
 
+@Suite struct MailBodyLimitTests {
+
+    /// Rows read under one pair of limits are not comparable to rows read under another, so
+    /// widening either has to invalidate everything. Half an index at 64 KB and half at 256 KB is
+    /// a search that covers some messages further than others with no way to tell which.
+    @Test func changingTheLimitsEmptiesTheIndex() throws {
+        let directory = temporaryDirectory()
+        let location = directory.appending(path: "bodies.sqlite")
+        try writeMessage(at: directory, named: "1", messageID: "<a@example.com>", body: "the chimney quote")
+
+        let first = MailBodyIndex(mailDirectory: directory, location: location)
+        _ = try first.sync()
+        #expect(try first.progress().indexed == 1)
+
+        // Stand in for a future change to `readLimit` by ageing what the index recorded.
+        let database = try SQLiteDatabase.openOrCreate(location)
+        try database.execute("UPDATE limits SET value = 1 WHERE key = 'read'")
+
+        let second = MailBodyIndex(mailDirectory: directory, location: location)
+        #expect(try second.progress().indexed == 0)
+    }
+
+    @Test func anUnchangedIndexIsLeftAlone() throws {
+        let directory = temporaryDirectory()
+        let location = directory.appending(path: "bodies.sqlite")
+        try writeMessage(at: directory, named: "1", messageID: "<a@example.com>", body: "the chimney quote")
+
+        let first = MailBodyIndex(mailDirectory: directory, location: location)
+        _ = try first.sync()
+
+        let second = MailBodyIndex(mailDirectory: directory, location: location)
+        #expect(try second.progress().indexed == 1)
+    }
+
+    /// The window is what it is on purpose; a change to it is a change to how much of the archive
+    /// is searchable, and it should not happen by accident.
+    @Test func theLimitsAreWhatWeThinkTheyAre() {
+        #expect(MailBodyIndex.readLimit == 256 * 1024)
+        #expect(MailBodyIndex.bodyLimit == 48_000)
+    }
+}
+
 @Suite struct MailHeaderTests {
 
     private let headers = """
