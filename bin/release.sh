@@ -105,6 +105,7 @@ run xcodebuild \
   CODE_SIGN_IDENTITY="$IDENTITY" \
   DEVELOPMENT_TEAM="$TEAM_ID" \
   OTHER_CODE_SIGN_FLAGS="--timestamp --options runtime" \
+  CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
   build
 [ "$DRY" = 1 ] || [ -d "$APP" ] || die "The build reported success but produced no app at $APP"
 ok "built"
@@ -114,10 +115,29 @@ ok "built"
 step "Verify the signature"
 if [ "$DRY" = 0 ]; then
   codesign --verify --deep --strict --verbose=2 "$APP" 2>&1 | sed 's/^/  /'
-  codesign -dvv "$APP" 2>&1 | grep -E "Authority|Timestamp|flags" | sed 's/^/  /'
-  codesign -d --entitlements - --xml "$APP" >/dev/null || die "Entitlements are unreadable."
-  codesign -dvv "$APP" 2>&1 | grep -q "flags=.*runtime" \
-    || die "The hardened runtime is not on. Notarisation will refuse this build."
+
+  # Captured, not piped. `codesign -dvv | grep -q` looks like the obvious check and is a trap:
+  # grep exits the moment it matches, codesign takes SIGPIPE, and under `pipefail` the pipeline
+  # reports failure — so a build that is perfectly correct fails the test for having passed it.
+  DESCRIPTION="$(codesign -dvv "$APP" 2>&1 || true)"
+  printf '%s\n' "$DESCRIPTION" | grep -E "Authority|Timestamp|flags" | sed 's/^/  /'
+
+  case "$DESCRIPTION" in
+    *"flags="*runtime*) ;;
+    *) die "The hardened runtime is not on. Notarisation will refuse this build." ;;
+  esac
+  ENTITLEMENTS="$(codesign -d --entitlements - --xml "$APP" 2>/dev/null || true)"
+  [ -n "$ENTITLEMENTS" ] || die "Entitlements are unreadable."
+
+  # The debug entitlement. `xcodebuild build` injects it; `xcodebuild archive` does not, which is
+  # why this only ever bites the first time somebody ships without archiving. Apple's notary
+  # service rejects it outright, and finding that out costs a full round trip — so it is checked
+  # here, where the answer is instant.
+  case "$ENTITLEMENTS" in
+    *get-task-allow*)
+      die "The build carries com.apple.security.get-task-allow — the debug entitlement.
+  Notarisation refuses it. CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO is what keeps it out." ;;
+  esac
 fi
 ok "signed with a timestamp and the hardened runtime"
 
