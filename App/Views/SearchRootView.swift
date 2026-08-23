@@ -156,12 +156,10 @@ struct SearchRootView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
                 .frame(minHeight: 28)
-                .background {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.quaternary)
-                }
+                .foregroundStyle(.secondary)
                 .overlay {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.16))
+                        .strokeBorder(Color.primary.opacity(0.18))
                 }
         }
         .buttonStyle(.plain)
@@ -679,21 +677,23 @@ private struct SourceButton: View {
             .padding(.horizontal, style == .iconOnly ? 9 : 12)
             .padding(.vertical, 6)
             .frame(minHeight: 28)
-            // On is an outline, not a fill. Eight solid blue buttons read as one blue block;
-            // an outline says "switched on" without shouting over the results underneath.
+            // Outline only, on the same ground as the search field. These are a control strip,
+            // not the content — filled buttons made the top of the panel louder than the results
+            // underneath, which is the wrong way round. A whisper of fill appears on hover, so
+            // the buttons still answer the mouse.
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isOn ? AnyShapeStyle(Color.accentColor.opacity(0.12)) : AnyShapeStyle(.quaternary))
+                    .fill(hovering ? Color.primary.opacity(0.06) : .clear)
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(isOn ? Color.accentColor : Color.primary.opacity(hovering ? 0.28 : 0.16),
-                                  lineWidth: isOn ? 1.5 : 1)
+                    .strokeBorder(isOn ? Color.accentColor.opacity(0.85) : Color.primary.opacity(0.18),
+                                  lineWidth: 1)
             }
-            .foregroundStyle(isOn ? Color.accentColor : .primary)
+            .foregroundStyle(isOn ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
             // Lifted off the row while it is being carried, so it is obvious which one is moving.
-            .shadow(color: .black.opacity(isDragging ? 0.35 : (isOn ? 0.18 : 0.06)),
-                    radius: isDragging ? 6 : 1, y: isDragging ? 3 : 1)
+            .shadow(color: .black.opacity(isDragging ? 0.3 : 0),
+                    radius: isDragging ? 6 : 0, y: isDragging ? 3 : 0)
             .scaleEffect(isDragging ? 1.05 : 1)
         }
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
