@@ -315,6 +315,8 @@ private struct PermissionSettings: View {
     @State private var center = PermissionCenter()
     @State private var busy: String?
     @State private var hasAutoRequested = false
+    /// Held so the window can be put back after a permission prompt takes the front away.
+    @State private var window: NSWindow?
 
     /// macOS gives no notification when a permission changes, so the only way to keep up with a
     /// trip to System Settings is to look again periodically.
@@ -334,6 +336,7 @@ private struct PermissionSettings: View {
                         Task {
                             await center.act(on: permission)
                             busy = nil
+                            comeBack()
                         }
                     }
                 }
@@ -358,9 +361,21 @@ private struct PermissionSettings: View {
             Task {
                 await center.act(on: permission)
                 busy = nil
+                comeBack()
             }
         }
         .onReceive(heartbeat) { _ in center.refresh() }
+        .background(WindowAccessor(window: $window))
+    }
+
+    /// Put Settings back in front after macOS has had its say.
+    ///
+    /// The prompt is the system's window, not Scout's. When it goes, macOS hands the front to
+    /// whatever app was there before — and Scout, having no Dock icon, is not it. The window was
+    /// never closed; it was buried, which looks the same and is more annoying.
+    private func comeBack() {
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
     }
 }
 

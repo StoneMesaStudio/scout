@@ -115,7 +115,13 @@ final class PanelController {
     func hide() {
         panel?.orderOut(nil)
         model.stop()
-        NSApp.hide(nil)
+
+        // Hiding the whole app is what hands focus back to whatever was in front — but `NSApp.hide`
+        // takes *every* window with it, and Scout's Settings window is one of them. Dismissing the
+        // panel used to make Settings vanish, which is exactly what it looks like when a permission
+        // notice sends you there and the panel closes on the way.
+        let somethingElseIsOnScreen = NSApp.windows.contains { $0.isVisible && $0 !== panel }
+        if !somethingElseIsOnScreen { NSApp.hide(nil) }
     }
 
     private func existingOrNewPanel() -> SearchPanel {

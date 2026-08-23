@@ -25,3 +25,27 @@ struct WindowDragHandle: NSViewRepresentable {
         }
     }
 }
+
+
+/// Hands a SwiftUI view the window it is living in.
+///
+/// Needed because answering a permission prompt gives the front back to whatever app was there
+/// before — not to a menu-bar app with no Dock icon. Without putting the window back afterwards,
+/// clicking Allow looks exactly like Settings closing itself.
+struct WindowAccessor: NSViewRepresentable {
+
+    @Binding var window: NSWindow?
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        // A view has no window until it is in the hierarchy, which is a turn later than this.
+        DispatchQueue.main.async { window = view.window }
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        if window == nil, let found = view.window {
+            DispatchQueue.main.async { window = found }
+        }
+    }
+}
