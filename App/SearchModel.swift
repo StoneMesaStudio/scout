@@ -223,8 +223,13 @@ final class SearchModel {
     private(set) var spotlightOwnsCommandSpace = SpotlightShortcut.isEnabled
 
     /// Whether to offer the swap in the footer at all.
+    ///
+    /// Always on in demo mode. It is the state every freshly installed Mac is in — and therefore
+    /// the widest the footer ever has to be — so it is the one worth photographing. Dismissing it
+    /// on the machine doing the development is exactly how that case stopped being visible.
     var showsCommandSpaceHint: Bool {
-        spotlightOwnsCommandSpace && !settings.hideCommandSpaceHint
+        if isDemo { return true }
+        return spotlightOwnsCommandSpace && !settings.hideCommandSpaceHint
     }
 
     func dismissCommandSpaceHint() {

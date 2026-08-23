@@ -362,75 +362,115 @@ struct SearchRootView: View {
 
     // MARK: - Footer
 
+    /// The line of hints along the bottom.
+    ///
+    /// It has to give ground gracefully, because it cannot always have the room it wants. On a Mac
+    /// where Spotlight still owns ⌘-Space — which is every Mac Scout has just been installed on —
+    /// the footer carries an extra capsule offering the swap, and at the panel's own default width
+    /// that was enough to overflow: SwiftUI compressed each label into a narrow column and the
+    /// whole row came out as stacked fragments of words.
+    ///
+    /// So the controls on the right are fixed and never compress, and the hints on the left are a
+    /// cascade — the longest set that fits, down to none at all. A hint you cannot read is worth
+    /// less than no hint.
     private var footer: some View {
         HStack(spacing: 16) {
-            KeyHint("return", "Open")
-            KeyHint("⌘return", "Reveal in Finder")
-            KeyHint("tab", "Search inside folder")
-            KeyHint("⌘1–8", "Sources")
-            KeyHint("⌥↑↓", "Section")
+            ViewThatFits(in: .horizontal) {
+                hints(["return": "Open", "⌘return": "Reveal in Finder", "tab": "Search inside folder",
+                       "⌘1–8": "Sources", "⌥↑↓": "Section"])
+                hints(["return": "Open", "⌘return": "Reveal in Finder", "⌘1–8": "Sources"])
+                hints(["return": "Open", "⌘1–8": "Sources"])
+                hints(["return": "Open"])
+                Color.clear.frame(width: 0, height: 0)
+            }
 
-            Spacer()
+            Spacer(minLength: 8)
 
             // Only while the shortcut is still Spotlight's. Once it isn't, this disappears
             // rather than becoming a button that does nothing useful.
             if model.showsCommandSpaceHint {
-                HStack(spacing: 6) {
-                    Text("⌘-Space opens Spotlight")
-                    Button("Hand it to Scout") { model.openSpotlightShortcutSettings() }
-                        .buttonStyle(.plain)
-                        .fontWeight(.semibold)
-                        .underline()
-                        .help("Opens Keyboard settings. Click \u{201C}Keyboard Shortcuts\u{2026}\u{201D}, choose Spotlight on the left, untick \u{201C}Show Spotlight search\u{201D}.")
-                    Button {
-                        model.dismissCommandSpaceHint()
-                    } label: {
-                        Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
-                    }
-                    .buttonStyle(.plain)
-                    .help("Stop offering. \u{2325}-Space keeps working.")
-                }
-                .font(.system(size: 11.5))
-                .padding(.horizontal, 9)
-                .padding(.vertical, 3)
-                .background(Color.primary.opacity(0.07), in: Capsule())
-                .foregroundStyle(.secondary)
+                commandSpaceHint
             }
-
-            Button {
-                model.resetPanelGeometry()
-            } label: {
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 11))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.primary.opacity(0.07), in: Capsule())
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Put the panel back to its default size and position")
-
-            Button {
-                model.openSettings()
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 11))
-                    Text("Settings")
-                }
-                .font(.system(size: 11.5))
-                .padding(.horizontal, 9)
-                .padding(.vertical, 3)
-                .background(Color.primary.opacity(0.07), in: Capsule())
-                .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Scout's settings, including permissions")
-
+            resetButton
+            settingsButton
             KeyHint("esc", "Dismiss")
         }
+        .lineLimit(1)
+        // Nothing on this row may be squeezed narrower than the words it holds; the row drops
+        // whole hints instead.
+        .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
+    }
+
+    /// One set of key hints, in the order given.
+    private func hints(_ pairs: KeyValuePairs<String, String>) -> some View {
+        HStack(spacing: 16) {
+            ForEach(pairs, id: \.key) { key, label in
+                KeyHint(key, label)
+            }
+        }
+        .fixedSize()
+    }
+
+    private var commandSpaceHint: some View {
+        HStack(spacing: 6) {
+            Text("⌘-Space opens Spotlight")
+            Button("Hand it to Scout") { model.openSpotlightShortcutSettings() }
+                .buttonStyle(.plain)
+                .fontWeight(.semibold)
+                .underline()
+                .help("Opens Keyboard settings. Click \u{201C}Keyboard Shortcuts\u{2026}\u{201D}, choose Spotlight on the left, untick \u{201C}Show Spotlight search\u{201D}.")
+            Button {
+                model.dismissCommandSpaceHint()
+            } label: {
+                Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+            }
+            .buttonStyle(.plain)
+            .help("Stop offering. \u{2325}-Space keeps working.")
+        }
+        .font(.system(size: 11.5))
+        .padding(.horizontal, 9)
+        .padding(.vertical, 3)
+        .background(Color.primary.opacity(0.07), in: Capsule())
+        .foregroundStyle(.secondary)
+        .fixedSize()
+    }
+
+    private var resetButton: some View {
+        Button {
+            model.resetPanelGeometry()
+        } label: {
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 11))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.primary.opacity(0.07), in: Capsule())
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .help("Put the panel back to its default size and position")
+    }
+
+    private var settingsButton: some View {
+        Button {
+            model.openSettings()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 11))
+                Text("Settings")
+            }
+            .font(.system(size: 11.5))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 3)
+            .background(Color.primary.opacity(0.07), in: Capsule())
+            .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .help("Scout's settings, including permissions")
     }
 }
 
@@ -833,5 +873,8 @@ private struct KeyHint: View {
         }
         .font(.system(size: 11.5))
         .foregroundStyle(.secondary)
+        // A hint that wraps into a stack of syllables is worse than one that is not there.
+        .lineLimit(1)
+        .fixedSize()
     }
 }
