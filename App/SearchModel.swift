@@ -131,8 +131,11 @@ final class SearchModel {
 
     /// Which sources are switched on. Remembered between searches and between launches.
     var enabledLanes: Set<SearchLane> {
-        get { settings.enabledLanes }
+        // Demo mode keeps its own set. Sharing the real one would write the screenshot's
+        // arrangement straight into the preferences of whoever's Mac took the picture.
+        get { isDemo ? demoLanes : settings.enabledLanes }
         set {
+            guard !isDemo else { demoLanes = newValue; runSearch(); return }
             // Zero sources is allowed. Switching everything off and then clicking the one you
             // want beats switching seven off one at a time, and the panel says plainly that
             // nothing is on rather than looking broken.
@@ -204,7 +207,7 @@ final class SearchModel {
     /// Put the sources back without kicking off a search — for the moments the panel is closing
     /// or reopening and is about to do that anyway.
     private func restoreLanesQuietly() {
-        guard let restored = previousLanes else { return }
+        guard !isDemo, let restored = previousLanes else { return }
         clearSolo()
         settings.enabledLanes = restored
     }
@@ -422,7 +425,16 @@ final class SearchModel {
         }
     }
 
+    /// Fills the panel from `DemoData` instead of reading anything real. Used only by
+    /// `--shot`, so the pictures on the website are of invented mail and invented files.
+    ///
+    /// Nothing in this mode writes to the preferences — it runs as a second copy of the app,
+    /// sharing the real one's defaults, and a screenshot must not cost somebody their settings.
+    var isDemo = false
+    private var demoLanes: Set<SearchLane> = Set(SearchLane.allCases)
+
     private func runSearch() {
+        if isDemo { buildDemoSections(); return }
         selection = 0
         laneLimits.removeAll()
         laneTotals.removeAll()
@@ -656,6 +668,35 @@ final class SearchModel {
         rebuildSections()
     }
 
+    /// Every lane on, every lane answered, nothing read.
+    private func buildDemoSections() {
+        selection = 0
+        laneLimits.removeAll()
+        laneTotals.removeAll()
+        clearResults()
+
+        demoLanes = Set(SearchLane.allCases)
+        rawFiles = DemoData.files()
+        contactRows = DemoData.contacts().map { .contact($0) }
+        mailRows = DemoData.mail().map { .mail($0) }
+        noteRows = DemoData.notes().map { .note($0) }
+        reminderRows = DemoData.reminders().map { .reminder($0) }
+        messageRows = []
+
+        // Totals larger than what is shown, because "10 of 1,090" is the part of the design worth
+        // photographing — a bare ten looks like all there is.
+        laneTotals[.contacts] = 1
+        laneTotals[.mail] = 62
+        laneTotals[.notes] = 3
+        laneTotals[.reminders] = 3
+        mailStatus = .ready
+        contactStatus = .ready
+        noteStatus = .ready
+        reminderStatus = .ready
+
+        rebuildSections()
+    }
+
     // MARK: - Assembling the panel
 
     private func rebuildSections() {
@@ -757,7 +798,9 @@ final class SearchModel {
         suggestions = FilterSuggestions.from(Array(ranked.prefix(300)))
 
         let matching = filter.apply(to: ranked)
-        laneTotals[.files] = matching.count
+        // A believable total for the screenshot: "4 of 1,090" is the part of the design worth
+        // photographing, and a bare 4 says the opposite of what it should.
+        laneTotals[.files] = isDemo ? 1_090 : matching.count
         let files = matching.prefix(limit(for: .files)).map { PanelRow.file($0) }
 
         // The one exact app-name match sits at the very top so Return still launches apps. It is

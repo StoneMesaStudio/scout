@@ -56,6 +56,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // `Scout --shot <query> <path> [width height]` photographs the panel on invented data.
+        if let index = CommandLine.arguments.firstIndex(of: "--shot"),
+           CommandLine.arguments.count > index + 2 {
+            let query = CommandLine.arguments[index + 1]
+            let destination = URL(filePath: CommandLine.arguments[index + 2])
+            let width = CommandLine.arguments.count > index + 3 ? Double(CommandLine.arguments[index + 3]) ?? 900 : 900
+            let height = CommandLine.arguments.count > index + 4 ? Double(CommandLine.arguments[index + 4]) ?? 700 : 700
+            panel.beginShot(query: query, size: NSSize(width: width, height: height))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                let report = self.panel.captureShot(to: destination)
+                try? report.write(to: destination.appendingPathExtension("txt"),
+                                  atomically: true, encoding: .utf8)
+                NSApp.terminate(nil)
+            }
+            return
+        }
+
         // `Scout --probe-notes <term> <path>` does the same for the two newest lanes, which read
         // stores a terminal cannot open either.
         if let index = CommandLine.arguments.firstIndex(of: "--probe-notes"),

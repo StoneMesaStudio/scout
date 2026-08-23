@@ -44,6 +44,31 @@ final class PanelController {
         return summary(of: panel)
     }
 
+    /// Lay the panel out offscreen on invented data, ready to be photographed.
+    ///
+    /// Used by `Scout --shot`, so the pictures on the website are made without anyone's real mail
+    /// or files on screen — and without the app reading a single store to draw them.
+    func beginShot(query: String, size: NSSize) {
+        let panel = existingOrNewPanel()
+        panel.setFrame(NSRect(origin: CGPoint(x: -6000, y: 0), size: size), display: false)
+        panel.orderFront(nil)
+        model.isDemo = true
+        model.reset()
+        model.text = query
+        panel.layoutIfNeeded()
+    }
+
+    /// Take the picture.
+    func captureShot(to url: URL) -> String {
+        guard let panel, let view = panel.contentView else { return "no panel" }
+        panel.layoutIfNeeded()
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return "no bitmap" }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        guard let png = rep.representation(using: .png, properties: [:]) else { return "no png" }
+        try? png.write(to: url)
+        return "\(rep.pixelsWide)x\(rep.pixelsHigh) at \(panel.backingScaleFactor)x"
+    }
+
     /// Re-measure after the search has had time to come back.
     func selfTestSummary() -> String {
         guard let panel else { return "no panel" }

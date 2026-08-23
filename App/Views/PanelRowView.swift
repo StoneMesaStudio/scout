@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import ScoutCore
 
 /// One line of results, whichever lane produced it. Keeping the layout identical across lanes is
@@ -66,7 +67,7 @@ struct PanelRowView: View {
         case .app(let entry, _):
             Image(nsImage: NSWorkspace.shared.icon(forFile: entry.url.path)).resizable()
         case .file(let result):
-            Image(nsImage: NSWorkspace.shared.icon(forFile: result.url.path)).resizable()
+            Image(nsImage: Self.fileIcon(for: result)).resizable()
         case .pane:
             symbolIcon("gearshape")
         case .mail:
@@ -80,6 +81,19 @@ struct PanelRowView: View {
         case .reminder(let hit):
             symbolIcon(hit.isCompleted ? "checkmark.circle.fill" : "circle")
         }
+    }
+
+    /// The Finder's icon for the file, or — when the file is no longer there — the icon for its
+    /// kind. A blank page next to a filename reads as a broken app; a PDF icon next to a PDF that
+    /// has just been moved reads as the truth.
+    private static func fileIcon(for result: SearchResult) -> NSImage {
+        if FileManager.default.fileExists(atPath: result.url.path) {
+            return NSWorkspace.shared.icon(forFile: result.url.path)
+        }
+        if let identifier = result.contentType, let type = UTType(identifier) {
+            return NSWorkspace.shared.icon(for: type)
+        }
+        return NSWorkspace.shared.icon(for: result.kind == .folder ? .folder : .item)
     }
 
     private func symbolIcon(_ name: String) -> some View {

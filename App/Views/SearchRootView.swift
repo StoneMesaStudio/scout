@@ -120,7 +120,9 @@ struct SearchRootView: View {
             // Wrapped rather than in one row: eight sources plus the scope switch do not fit
             // across the panel at its minimum width, and a row that overflows silently loses
             // whichever sources happen to be last.
-            SourceStrip(model: model, style: settings.sourceButtonStyle)
+            // The screenshots show the shipping default, not whatever the Mac taking them
+            // happens to be set to.
+            SourceStrip(model: model, style: model.isDemo ? .iconOnly : settings.sourceButtonStyle)
 
             Spacer(minLength: 8)
             scopeControl
