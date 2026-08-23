@@ -120,4 +120,15 @@ private func day(_ offset: Int) -> Date {
         let hit = reminder("Chimney", list: "Household", due: Date()).hit
         #expect(hit.detail == "Household · Due today")
     }
+
+    @Test func somethingAlreadyDoneIsNeverCalledOverdue() {
+        // 2,567 of the 2,591 reminders on the Mac this was written on are completed. Calling all
+        // of them overdue is the app telling somebody almost every row is late.
+        let done = reminder("Chimney", list: "Household", due: day(-40), completed: true).hit
+        #expect(!done.detail.contains("Overdue"))
+        #expect(done.detail.hasPrefix("Household · Due "))
+
+        let outstanding = reminder("Gutters", list: "Household", due: day(-40)).hit
+        #expect(outstanding.detail == "Household · Overdue by 40 days")
+    }
 }

@@ -32,10 +32,18 @@ public struct ReminderHit: Identifiable, Sendable, Hashable {
     }
 
     /// What to show under the title: which list, when it is due, and its note if it has one.
+    ///
+    /// A finished reminder never says "overdue". Ninety-nine per cent of a real list is finished,
+    /// so the overdue wording — which exists to make an outstanding one jump out — was being
+    /// applied to almost every row, telling people something they had already done was late.
     public var detail: String {
         var parts: [String] = []
         if let list, !list.isEmpty { parts.append(list) }
-        if let due { parts.append(Self.dueDescription(due)) }
+        if let due {
+            parts.append(isCompleted
+                         ? "Due \(due.formatted(date: .abbreviated, time: .omitted))"
+                         : Self.dueDescription(due))
+        }
         if let note, !note.isEmpty { parts.append(note) }
         return parts.joined(separator: " · ")
     }

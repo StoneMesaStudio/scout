@@ -56,14 +56,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // `Scout --shot <query> <path> [width height]` photographs the panel on invented data.
+        // `Scout --shot <scene> <path> [width height [word]]` photographs one of the pictures on
+        // the website, on invented data. The trailing word replaces the scene's own, which is how
+        // a search term gets tried against the real app and settings indexes without a rebuild.
         if let index = CommandLine.arguments.firstIndex(of: "--shot"),
            CommandLine.arguments.count > index + 2 {
-            let query = CommandLine.arguments[index + 1]
+            let name = CommandLine.arguments[index + 1]
             let destination = URL(filePath: CommandLine.arguments[index + 2])
             let width = CommandLine.arguments.count > index + 3 ? Double(CommandLine.arguments[index + 3]) ?? 900 : 900
-            let height = CommandLine.arguments.count > index + 4 ? Double(CommandLine.arguments[index + 4]) ?? 700 : 700
-            panel.beginShot(query: query, size: NSSize(width: width, height: height))
+            let height = CommandLine.arguments.count > index + 4 ? Double(CommandLine.arguments[index + 4]) ?? 720 : 720
+            let canvas = NSSize(width: width, height: height)
+            let query = CommandLine.arguments.count > index + 5 ? CommandLine.arguments[index + 5] : nil
+
+            guard let scene = DemoData.Scene(rawValue: name) else {
+                let known = DemoData.Scene.allCases.map(\.rawValue).joined(separator: ", ")
+                try? "unknown scene \(name) — try one of: \(known)\n"
+                    .write(to: destination.appendingPathExtension("txt"), atomically: true, encoding: .utf8)
+                NSApp.terminate(nil)
+                return
+            }
+
+            panel.beginShot(scene: scene, query: query, size: canvas)
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                 let report = self.panel.captureShot(to: destination)
                 try? report.write(to: destination.appendingPathExtension("txt"),

@@ -146,7 +146,11 @@ final class SearchModel {
 
     /// The sources in the order the user has arranged them, which is also the order their
     /// results appear in.
-    var orderedLanes: [SearchLane] { settings.laneOrder }
+    ///
+    /// The pictures on the website use the order the app ships in, not the order of whoever's Mac
+    /// took them — otherwise the buttons on the website would be arranged the way one person
+    /// happens to like them, and the numbered shortcuts underneath would not match.
+    var orderedLanes: [SearchLane] { isDemo ? SearchLane.allCases : settings.laneOrder }
 
     /// The number on a source's button: where it sits, not what it is.
     func number(for lane: SearchLane) -> Int? {
@@ -436,7 +440,28 @@ final class SearchModel {
     /// Nothing in this mode writes to the preferences — it runs as a second copy of the app,
     /// sharing the real one's defaults, and a screenshot must not cost somebody their settings.
     var isDemo = false
+    private var demoScene: DemoData.Scene = .sections
+    /// A word typed on the command line instead of the scene's own, for trying one out without
+    /// a rebuild.
+    private var demoQuery: String?
     private var demoLanes: Set<SearchLane> = Set(SearchLane.allCases)
+
+    /// Arrange the panel for one of the pictures on the website.
+    ///
+    /// Everything after this point is the ordinary drawing path — the scene only decides what the
+    /// sources hand back, so a picture cannot show a layout the app is incapable of.
+    func showDemoScene(_ scene: DemoData.Scene, query: String? = nil) {
+        isDemo = true
+        demoScene = scene
+        demoQuery = query
+        let setup = DemoData.setup(for: scene, query: query)
+        demoLanes = setup.lanes
+        soloedLane = setup.solo
+        scope = setup.scope
+        filter = setup.filter
+        text = setup.query
+        buildDemoSections()
+    }
 
     private func runSearch() {
         if isDemo { buildDemoSections(); return }
@@ -673,33 +698,44 @@ final class SearchModel {
         rebuildSections()
     }
 
-    /// Every lane on, every lane answered, nothing read.
+    /// Fill every section from the scene, and nothing from disk.
     private func buildDemoSections() {
         selection = 0
         laneLimits.removeAll()
         laneTotals.removeAll()
         clearResults()
 
-        demoLanes = Set(SearchLane.allCases)
-        rawFiles = DemoData.files()
-        contactRows = DemoData.contacts().map { .contact($0) }
-        mailRows = DemoData.mail().map { .mail($0) }
-        noteRows = DemoData.notes().map { .note($0) }
-        reminderRows = DemoData.reminders().map { .reminder($0) }
-        messageRows = []
+        let setup = DemoData.setup(for: demoScene, query: demoQuery)
+        demoLanes = setup.lanes
 
-        // Totals larger than what is shown, because "10 of 1,090" is the part of the design worth
-        // photographing — a bare ten looks like all there is.
-        laneTotals[.contacts] = 1
-        laneTotals[.mail] = 62
-        laneTotals[.notes] = 3
-        laneTotals[.reminders] = 3
+        // The shipped cap, not whoever's Mac is taking the picture. Left to read the real
+        // preference, a Mac set to show 5 would quietly publish a different set of screenshots
+        // from a Mac set to show 20.
+        for lane in SearchLane.allCases where lane != soloedLane {
+            laneLimits[lane] = ScoutSettings.defaultResultsPerSource
+        }
+
+        rawFiles = setup.files
+        contactRows = trimmed(setup.contacts.map { PanelRow.contact($0) }, .contacts)
+        mailRows = trimmed(setup.mail.map { PanelRow.mail($0) }, .mail)
+        messageRows = trimmed(setup.messages.map { PanelRow.message($0) }, .messages)
+        noteRows = trimmed(setup.notes.map { PanelRow.note($0) }, .notes)
+        reminderRows = trimmed(setup.reminders.map { PanelRow.reminder($0) }, .reminders)
+
+        for (lane, total) in setup.totals { laneTotals[lane] = total }
         mailStatus = .ready
         contactStatus = .ready
+        messageStatus = .ready
         noteStatus = .ready
         reminderStatus = .ready
 
         rebuildSections()
+    }
+
+    /// Sources cut themselves down to the cap before handing rows over; the demo has to do the
+    /// same, or a scene with more rows than the cap would draw a section the app never draws.
+    private func trimmed(_ rows: [PanelRow], _ lane: SearchLane) -> [PanelRow] {
+        Array(rows.prefix(limit(for: lane)))
     }
 
     // MARK: - Assembling the panel
