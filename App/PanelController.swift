@@ -78,6 +78,8 @@ final class PanelController {
             case .pane: "pane"
             case .mail: "mail"
             case .message: "msg"
+            case .note: "note"
+            case .reminder: "rem"
             case .contact: "contact"
             }
         case .showMore(_, let remaining): "(+\(remaining) more)"

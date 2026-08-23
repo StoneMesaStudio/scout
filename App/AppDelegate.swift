@@ -56,6 +56,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // `Scout --probe-notes <term> <path>` does the same for the two newest lanes, which read
+        // stores a terminal cannot open either.
+        if let index = CommandLine.arguments.firstIndex(of: "--probe-notes"),
+           CommandLine.arguments.count > index + 2 {
+            let term = CommandLine.arguments[index + 1]
+            let destination = URL(filePath: CommandLine.arguments[index + 2])
+            Task {
+                let report = await Diagnostics.probeNotesAndReminders(term)
+                try? report.write(to: destination, atomically: true, encoding: .utf8)
+                NSApp.terminate(nil)
+            }
+            return
+        }
+
         if let index = CommandLine.arguments.firstIndex(of: "--probe"),
            CommandLine.arguments.count > index + 2 {
             let report = Diagnostics.probe(CommandLine.arguments[index + 1])
@@ -124,7 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .target = self
         menu.addItem(withTitle: "Getting Started…", action: #selector(showWelcome), keyEquivalent: "")
             .target = self
-        menu.addItem(withTitle: "Diagnose Mail & Messages…", action: #selector(runDiagnostic), keyEquivalent: "")
+        menu.addItem(withTitle: "Diagnose Sources…", action: #selector(runDiagnostic), keyEquivalent: "")
             .target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Scout", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -148,11 +162,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func runDiagnostic() {
-        let report = Diagnostics.report()
         let url = FileManager.default.homeDirectoryForCurrentUser
             .appending(path: "Desktop/Scout Diagnostic.txt")
-        try? report.write(to: url, atomically: true, encoding: .utf8)
-        NSWorkspace.shared.activateFileViewerSelecting([url])
+        // Reminders can only be read asynchronously, so the report is assembled off the main
+        // thread and written once — rather than written twice and appearing to change by itself.
+        Task {
+            var report = Diagnostics.report()
+            report += "\n\n" + (await Diagnostics.probeNotesAndReminders("the"))
+            try? report.write(to: url, atomically: true, encoding: .utf8)
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
     }
 
     // MARK: - Hotkeys

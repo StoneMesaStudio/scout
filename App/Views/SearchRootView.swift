@@ -81,8 +81,8 @@ struct SearchRootView: View {
             }
             return .handled
         }
-        // ⌘L flips the file scope, ⌘1…⌘6 switch a source on or off.
-        .onKeyPress(keys: ["l", "1", "2", "3", "4", "5", "6"]) { press in
+        // ⌘L flips the file scope, ⌘1…⌘8 switch a source on or off.
+        .onKeyPress(keys: ["l", "1", "2", "3", "4", "5", "6", "7", "8"]) { press in
             guard press.modifiers.contains(.command) else { return .ignored }
             if press.key.character == "l" {
                 model.toggleScope()
@@ -101,17 +101,21 @@ struct SearchRootView: View {
     // MARK: - Sources
 
     private var sourceBar: some View {
-        HStack(spacing: 7) {
-            ForEach(SearchLane.allCases) { lane in
-                SourceButton(
-                    lane: lane,
-                    isOn: model.enabledLanes.contains(lane)
-                ) {
-                    model.toggleLane(lane)
+        HStack(alignment: .top, spacing: 7) {
+            // Wrapped rather than in one row: eight sources plus the scope switch do not fit
+            // across the panel at its minimum width, and a row that overflows silently loses
+            // whichever sources happen to be last.
+            SourceFlow(spacing: 7) {
+                ForEach(SearchLane.allCases) { lane in
+                    SourceButton(
+                        lane: lane,
+                        isOn: model.enabledLanes.contains(lane)
+                    ) {
+                        model.toggleLane(lane)
+                    }
                 }
             }
 
-            Spacer()
             scopeControl
         }
         .padding(.horizontal, 17)
@@ -188,7 +192,12 @@ struct SearchRootView: View {
 
         case .status(let lane, let status):
             LaneStatusView(status: status, lane: lane) {
-                model.requestContactsAccess()
+                // Which prompt to raise is decided by the notice that offered it, not by the
+                // lane — Contacts and Reminders are the only two macOS lets an app ask about.
+                switch status {
+                case .remindersNotAsked: model.requestRemindersAccess()
+                default: model.requestContactsAccess()
+                }
             }
 
         case .row(let row, let index):
@@ -309,7 +318,7 @@ struct SearchRootView: View {
             KeyHint("return", "Open")
             KeyHint("⌘return", "Reveal in Finder")
             KeyHint("tab", "Search inside folder")
-            KeyHint("⌘1–6", "Sources")
+            KeyHint("⌘1–8", "Sources")
 
             Spacer()
 
@@ -376,6 +385,61 @@ struct SearchRootView: View {
 }
 
 // MARK: - Pieces
+
+/// Lays its children out left to right, starting a new line when the next one will not fit.
+///
+/// SwiftUI has no wrapping stack, and the alternative — letting an HStack squeeze — makes the
+/// source names illegible before it makes them fit.
+private struct SourceFlow: Layout {
+
+    var spacing: CGFloat = 7
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        let rows = arrange(subviews: subviews, in: width)
+        let height = rows.reduce(0) { $0 + $1.height } + spacing * CGFloat(max(0, rows.count - 1))
+        let widest = rows.map(\.width).max() ?? 0
+        return CGSize(width: min(width, max(widest, 0)), height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in arrange(subviews: subviews, in: bounds.width) {
+            var x = bounds.minX
+            for index in row.indices {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: .unspecified)
+                x += size.width + spacing
+            }
+            y += row.height + spacing
+        }
+    }
+
+    private struct Row {
+        var indices: [Int] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func arrange(subviews: Subviews, in width: CGFloat) -> [Row] {
+        var rows: [Row] = []
+        var row = Row()
+
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            let needed = row.indices.isEmpty ? size.width : row.width + spacing + size.width
+            if !row.indices.isEmpty, needed > width {
+                rows.append(row)
+                row = Row()
+            }
+            row.width = row.indices.isEmpty ? size.width : row.width + spacing + size.width
+            row.height = max(row.height, size.height)
+            row.indices.append(index)
+        }
+        if !row.indices.isEmpty { rows.append(row) }
+        return rows
+    }
+}
 
 /// A source switch. Drawn as a real button — raised, bordered, and obviously filled when on —
 /// because a row of bare words does not read as something you can press.

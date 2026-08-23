@@ -16,5 +16,12 @@
 	     indistinguishable from the user having said no. -->
 	<key>com.apple.security.personal-information.addressbook</key>
 	<true/>
+
+	<!-- Reminders rides on EventKit, and the hardened runtime gates it behind the calendars
+	     resource. Same failure mode as Contacts had: without this, macOS reports the access as
+	     "restricted" and never shows a prompt, which from the outside looks exactly like the
+	     user having refused. -->
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
 </dict>
 </plist>

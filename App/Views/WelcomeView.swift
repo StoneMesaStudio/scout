@@ -37,7 +37,7 @@ struct WelcomeView: View {
             Step(
                 number: 2,
                 title: "Let Scout read mail and messages",
-                detail: "Only needed for the Mail and Messages lanes. Turn on Scout in Full Disk Access. Everything stays on this Mac.",
+                detail: "Only needed for the Mail, Messages and Notes lanes. Turn on Scout in Full Disk Access. Everything stays on this Mac.",
                 button: "Open Full Disk Access",
                 url: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles"
             )

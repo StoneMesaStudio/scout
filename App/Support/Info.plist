@@ -17,5 +17,12 @@
 	<string>Scout searches your Downloads folder so it can find your files.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>Scout searches your contacts so you can find a person by name, number or address.</string>
+
+	<!-- Reminders. The full-access key is the one macOS 14 and later reads; the older key is
+	     kept because a prompt with no sentence in it reads like something to deny. -->
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Scout searches your reminders so you can find one by what it says, what list it is in, or the note on it.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Scout searches your reminders so you can find one by what it says, what list it is in, or the note on it.</string>
 </dict>
 </plist>

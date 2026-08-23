@@ -1,5 +1,6 @@
 import AppKit
 import Contacts
+import EventKit
 import Foundation
 import Observation
 import ScoutCore
@@ -65,20 +66,21 @@ final class PermissionCenter {
     // MARK: - Reading the truth
 
     func refresh() {
-        permissions = [fullDiskAccess, contacts, fileFolders, spotlightShortcut]
+        permissions = [fullDiskAccess, contacts, reminders, fileFolders, spotlightShortcut]
             .map(withGrantDate)
     }
 
     private var fullDiskAccess: Permission {
-        // Mail and Messages are the two stores behind this switch, and the only honest test is
-        // to try reading one of them.
+        // Mail, Messages and Notes are the three stores behind this switch, and the only honest
+        // test is to try reading one of them.
         let readable = StoreAccess.canRead(directory: home.appending(path: "Library/Mail"))
             || StoreAccess.canRead(file: home.appending(path: "Library/Messages/chat.db"))
+            || StoreAccess.canRead(file: NotesIndex.defaultSource(home: home))
 
         return Permission(
             id: "fullDisk",
             title: "Full Disk Access",
-            purpose: "Lets Scout search your mail and messages. Nothing leaves this Mac.",
+            purpose: "Lets Scout search your mail, messages and notes. Nothing leaves this Mac.",
             symbol: "externaldrive",
             state: readable ? .granted : .notGranted,
             action: .openSettings("x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles")
@@ -101,6 +103,26 @@ final class PermissionCenter {
             // Once refused, macOS will not ask again — only the settings pane can undo it.
             action: state == .notGranted
                 ? .openSettings("x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Contacts")
+                : .ask
+        )
+    }
+
+    private var reminders: Permission {
+        let state: Permission.State = switch EKEventStore.authorizationStatus(for: .reminder) {
+        case .fullAccess: .granted
+        case .notDetermined: .notAsked
+        default: .notGranted
+        }
+
+        return Permission(
+            id: "reminders",
+            title: "Reminders",
+            purpose: "Lets Scout find a reminder by what it says, what list it is in, or the note on it.",
+            symbol: "checklist",
+            state: state,
+            // Once refused, macOS will not ask again — only the settings pane can undo it.
+            action: state == .notGranted
+                ? .openSettings("x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Reminders")
                 : .ask
         )
     }
@@ -150,6 +172,9 @@ final class PermissionCenter {
 
         case .ask where permission.id == "contacts":
             _ = try? await CNContactStore().requestAccess(for: .contacts)
+
+        case .ask where permission.id == "reminders":
+            _ = try? await EKEventStore().requestFullAccessToReminders()
 
         case .ask where permission.id == "files":
             // There is no API to request these; reading the folder is what makes macOS ask.

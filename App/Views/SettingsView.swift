@@ -84,6 +84,14 @@ private struct GeneralSettings: View {
                 MailIndexStatus(enabled: settings.searchMailBodies)
             }
 
+            Section("Notes") {
+                Text("Notes keeps its text compressed and unreadable to anything but itself, which is why Spotlight cannot find a note by what it says. Scout reads each note once and keeps up as they change. Locked notes stay locked — only their titles are searchable.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                NotesIndexStatus()
+            }
+
             Section {
                 Toggle("Start Scout when I log in", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, wanted in
@@ -161,6 +169,45 @@ private struct MailIndexStatus: View {
         await service.setBodySearch(enabled)
         progress = await service.bodyProgress()
         size = await service.bodyIndexSize()
+    }
+}
+
+/// How many notes are indexed, and a way to start over.
+private struct NotesIndexStatus: View {
+
+    @State private var count = 0
+    @State private var working = false
+
+    private let service = NotesSearchService()
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if count > 0 {
+                Label("^[\(count) note](inflect: true) indexed", systemImage: "checkmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            } else {
+                Text("Nothing indexed yet — Full Disk Access is what this one waits on.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Build again") {
+                working = true
+                Task {
+                    await service.rebuild()
+                    count = await service.indexedCount()
+                    working = false
+                }
+            }
+            .buttonStyle(.link)
+            .font(.caption)
+            .disabled(working)
+        }
+        .task {
+            await service.prepare()
+            count = await service.indexedCount()
+        }
     }
 }
 

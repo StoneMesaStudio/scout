@@ -1,5 +1,6 @@
 import AppKit
 import Contacts
+import EventKit
 import Observation
 import ScoutCore
 
@@ -13,6 +14,8 @@ enum PanelRow: Identifiable {
     case mail(MailHit)
     case message(MessageHit)
     case contact(ContactHit)
+    case note(NoteHit)
+    case reminder(ReminderHit)
 
     var id: String {
         switch self {
@@ -22,6 +25,8 @@ enum PanelRow: Identifiable {
         case .mail(let hit): "mail:\(hit.rowID)"
         case .message(let hit): "message:\(hit.rowID)"
         case .contact(let hit): "contact:\(hit.identifier)"
+        case .note(let hit): "note:\(hit.rowID)"
+        case .reminder(let hit): "reminder:\(hit.identifier)"
         }
     }
 }
@@ -35,6 +40,9 @@ enum LaneStatus: Equatable {
     /// about — so the notice offers a prompt rather than a trip to System Settings.
     case contactsNotAsked
     case contactsDenied
+    /// Reminders, like Contacts, is a permission an app may ask for itself.
+    case remindersNotAsked
+    case remindersDenied
     case building
     case failed(String)
 }
@@ -161,8 +169,11 @@ final class SearchModel {
     private let mail = MailSearchService()
     private let messages = MessageSearchService()
     private let contacts = ContactSearchService()
-    /// The authorization check is a plain static read, so it stays synchronous.
+    private let notes = NotesSearchService()
+    private let reminders = ReminderSearchService()
+    /// The authorization checks are plain static reads, so they stay synchronous.
     private let contactAccess = ContactSearcher()
+    private let reminderAccess = ReminderSearcher()
     private let ranker = Ranker()
     private let appIndex = AppIndex.scan()
     private let paneIndex = SettingsPaneIndex.scan()
@@ -173,15 +184,21 @@ final class SearchModel {
     private var mailRows: [PanelRow] = []
     private var messageRows: [PanelRow] = []
     private var contactRows: [PanelRow] = []
+    private var noteRows: [PanelRow] = []
+    private var reminderRows: [PanelRow] = []
 
     private var mailStatus: LaneStatus = .ready
     private var messageStatus: LaneStatus = .ready
     private var contactStatus: LaneStatus = .ready
+    private var noteStatus: LaneStatus = .ready
+    private var reminderStatus: LaneStatus = .ready
 
     private var debounce: Task<Void, Never>?
     private var messageTask: Task<Void, Never>?
     private var mailTask: Task<Void, Never>?
     private var contactTask: Task<Void, Never>?
+    private var noteTask: Task<Void, Never>?
+    private var reminderTask: Task<Void, Never>?
     private var mailIndexTask: Task<Void, Never>?
     private var selectedRowID: String?
 
@@ -191,7 +208,7 @@ final class SearchModel {
     static func defaultLimit(for lane: SearchLane) -> Int {
         switch lane {
         case .files: 25
-        case .contacts, .mail, .messages: 12
+        case .contacts, .mail, .messages, .notes, .reminders: 12
         case .apps, .system: 8
         }
     }
@@ -219,6 +236,8 @@ final class SearchModel {
         case .contacts where query.count >= 2: searchContacts(query)
         case .mail where query.count >= 2: searchMail(query)
         case .messages where query.count >= 2: searchMessages(query)
+        case .notes where query.count >= 2: searchNotes(query)
+        case .reminders where query.count >= 2: searchReminders(query)
         default: rebuildSections()
         }
     }
@@ -226,6 +245,9 @@ final class SearchModel {
     /// Contacts changing under us — someone added in Contacts.app, or a card edited — otherwise
     /// would not be findable until the five-minute cache expired.
     private var contactChangeObserver: NSObjectProtocol?
+    /// Same problem for reminders: one ticked off in Reminders would keep showing as outstanding
+    /// until the cache expired.
+    private var reminderChangeObserver: NSObjectProtocol?
 
     init() {
         contactChangeObserver = NotificationCenter.default.addObserver(
@@ -234,6 +256,14 @@ final class SearchModel {
             queue: .main
         ) { [contacts] _ in
             Task { await contacts.invalidate() }
+        }
+
+        reminderChangeObserver = NotificationCenter.default.addObserver(
+            forName: .EKEventStoreChanged,
+            object: nil,
+            queue: .main
+        ) { [reminders] _ in
+            Task { await reminders.invalidate() }
         }
 
         searcher.onResults = { [weak self] results in
@@ -263,6 +293,8 @@ final class SearchModel {
         mailRows = []
         messageRows = []
         contactRows = []
+        noteRows = []
+        reminderRows = []
         sections = []
         displayItems = []
         hiddenCount = 0
@@ -273,6 +305,8 @@ final class SearchModel {
         messageTask?.cancel()
         mailTask?.cancel()
         contactTask?.cancel()
+        noteTask?.cancel()
+        reminderTask?.cancel()
         // The mail index keeps building across panel closes on purpose: stopping and restarting
         // it every time would mean never finishing.
         searcher.stop()
@@ -298,6 +332,8 @@ final class SearchModel {
         mailTask?.cancel()
         messageTask?.cancel()
         contactTask?.cancel()
+        noteTask?.cancel()
+        reminderTask?.cancel()
         clearResults()
 
         let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -330,6 +366,24 @@ final class SearchModel {
             searchMessages(query)
         }
 
+        if enabledLanes.contains(.notes), query.count >= 2 {
+            searchNotes(query)
+        }
+
+        if enabledLanes.contains(.reminders) {
+            switch reminderAccess.access {
+            case .allowed:
+                reminderStatus = .ready
+                if query.count >= 2 { searchReminders(query) }
+            case .notRequested:
+                // Same reasoning as Contacts: a prompt that appears by itself mid-typing is one
+                // people dismiss without reading, so the notice offers a button instead.
+                reminderStatus = .remindersNotAsked
+            case .denied:
+                reminderStatus = .remindersDenied
+            }
+        }
+
         rebuildSections()
     }
 
@@ -357,6 +411,23 @@ final class SearchModel {
         }
     }
 
+    /// Raise the system's own Reminders prompt. Routed through Settings for the same reason the
+    /// Contacts one is: the panel floats, macOS's prompt does not, and the prompt lands behind it.
+    func requestRemindersAccess() {
+        onDismiss?()
+        Task { [reminders] in await reminders.invalidate() }
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: SettingsWindowController.openNotification,
+                object: nil,
+                userInfo: [
+                    SettingsWindowController.tabKey: SettingsView.Tab.permissions,
+                    SettingsWindowController.requestKey: "reminders",
+                ]
+            )
+        }
+    }
+
     /// Reading every contact takes long enough to be worth keeping off the main thread, and it
     /// only happens once every few minutes.
     private func searchContacts(_ query: String) {
@@ -366,6 +437,47 @@ final class SearchModel {
             guard !Task.isCancelled, query == self.text.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
             self.contactRows = page.items.map { .contact($0) }
             self.laneTotals[.contacts] = page.total
+            self.rebuildSections()
+        }
+    }
+
+    /// Notes are read off the main thread for the same reason messages are: the first sync
+    /// decompresses every note on the Mac.
+    private func searchNotes(_ query: String) {
+        noteStatus = .building
+        let cap = limit(for: .notes)
+        noteTask = Task { [notes] in
+            await notes.prepare()
+            let page = await notes.search(query, limit: cap)
+            // Read the state after searching, not before: a damaged index only shows itself when
+            // a query runs, and reading first would report it as ready and empty.
+            let state = await notes.currentState()
+            guard !Task.isCancelled else { return }
+            self.applyNotes(page, state: state, query: query)
+        }
+    }
+
+    private func applyNotes(_ page: SearchPage<NoteHit>, state: NotesSearchService.State, query: String) {
+        guard query == text.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+        switch state {
+        case .needsFullDiskAccess: noteStatus = .needsFullDiskAccess
+        case .failed(let reason): noteStatus = .failed(reason)
+        case .idle, .building, .ready: noteStatus = .ready
+        }
+        noteRows = page.items.map { .note($0) }
+        laneTotals[.notes] = page.total
+        rebuildSections()
+    }
+
+    /// EventKit reads every reminder on the Mac to answer anything at all, so it happens on its
+    /// own task and the result is cached for a minute.
+    private func searchReminders(_ query: String) {
+        let cap = limit(for: .reminders)
+        reminderTask = Task { [reminders] in
+            let page = await reminders.search(query, limit: cap)
+            guard !Task.isCancelled, query == self.text.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+            self.reminderRows = page.items.map { .reminder($0) }
+            self.laneTotals[.reminders] = page.total
             self.rebuildSections()
         }
     }
@@ -474,6 +586,12 @@ final class SearchModel {
                 let all = paneIndex.matches(for: text)
                 let rows = all.prefix(limit(for: .system)).map { PanelRow.pane($0) }
                 built.append(PanelSection(lane: .system, rows: Array(rows), status: .ready, total: all.count))
+            case .notes:
+                built.append(PanelSection(lane: .notes, rows: noteRows, status: noteStatus,
+                                          total: laneTotals[.notes] ?? noteRows.count))
+            case .reminders:
+                built.append(PanelSection(lane: .reminders, rows: reminderRows, status: reminderStatus,
+                                          total: laneTotals[.reminders] ?? reminderRows.count))
             }
         }
 
@@ -617,18 +735,33 @@ final class SearchModel {
             if let url = hit.openURL { NSWorkspace.shared.open(url) }
         case .contact(let hit):
             if let url = hit.openURL { NSWorkspace.shared.open(url) }
+        case .note(let hit):
+            // Same fallback as Messages: without an identifier there is nothing to open, and
+            // launching Notes beats doing nothing.
+            open(hit.openURL, orLaunch: "com.apple.Notes")
+        case .reminder(let hit):
+            open(hit.openURL, orLaunch: "com.apple.reminders")
         case .message(let hit):
             // Without a conversation to open, fall back to launching Messages itself rather
             // than doing nothing.
-            if let url = hit.openURL {
-                NSWorkspace.shared.open(url)
-            } else if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.MobileSMS") {
-                NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration())
-            }
+            open(hit.openURL, orLaunch: "com.apple.MobileSMS")
         case nil:
             return
         }
         onDismiss?()
+    }
+
+    /// Open a deep link, or failing that the app that owns it. The deep links into Notes,
+    /// Reminders and Messages are all undocumented schemes; when one stops working, landing in
+    /// the right app is still an answer, and a dead Return key is not.
+    private func open(_ url: URL?, orLaunch bundleIdentifier: String) {
+        // The return value matters. `open` answers false when nothing is registered for the
+        // scheme, which is precisely what happens the day Apple retires one of these — and
+        // ignoring it would leave Return doing nothing at all.
+        if let url, NSWorkspace.shared.open(url) { return }
+        if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) {
+            NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration())
+        }
     }
 
     /// ⌘Return: show it in the Finder rather than opening it.
@@ -636,7 +769,7 @@ final class SearchModel {
         let url: URL? = switch selectedRow {
         case .app(let entry, _): entry.url
         case .file(let result): result.url
-        case .pane, .mail, .message, .contact, nil: nil
+        case .pane, .mail, .message, .contact, .note, .reminder, nil: nil
         }
         guard let url else { return }
         if let result = selectedFile { pickMemory.record(query: text, url: result.url) }

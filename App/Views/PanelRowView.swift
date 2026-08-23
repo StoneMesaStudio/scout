@@ -9,11 +9,11 @@ struct PanelRowView: View {
     let row: PanelRow
     let selected: Bool
 
-    /// A message or a subject line is truncated at the end like a sentence, not in the middle
-    /// like a filename.
-    private var isMessage: Bool {
+    /// A message, a subject line or a note title is truncated at the end like a sentence, not in
+    /// the middle like a filename.
+    private var isProse: Bool {
         switch row {
-        case .message, .mail: true
+        case .message, .mail, .note, .reminder: true
         default: false
         }
     }
@@ -28,7 +28,7 @@ struct PanelRowView: View {
                     Text(title)
                         .font(.system(size: 14, weight: .medium))
                         .lineLimit(1)
-                        .truncationMode(isMessage ? .tail : .middle)
+                        .truncationMode(isProse ? .tail : .middle)
 
                     if let badge {
                         Text(badge)
@@ -41,7 +41,9 @@ struct PanelRowView: View {
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .truncationMode(.head)
+                    // Paths are cut at the front so the filename survives; a sentence is cut at
+                    // the end, the way anyone reading it would.
+                    .truncationMode(isProse ? .tail : .head)
             }
 
             Spacer(minLength: 8)
@@ -73,6 +75,10 @@ struct PanelRowView: View {
             symbolIcon("message.fill")
         case .contact:
             symbolIcon("person.crop.circle.fill")
+        case .note(let hit):
+            symbolIcon(hit.isLocked ? "lock.fill" : "note.text")
+        case .reminder(let hit):
+            symbolIcon(hit.isCompleted ? "checkmark.circle.fill" : "circle")
         }
     }
 
@@ -93,6 +99,8 @@ struct PanelRowView: View {
         // A message has no title of its own, so the message *is* the title.
         case .message(let hit): hit.text
         case .contact(let hit): hit.name
+        case .note(let hit): hit.title
+        case .reminder(let hit): hit.title
         }
     }
 
@@ -102,6 +110,12 @@ struct PanelRowView: View {
             "\(result.duplicateCount) copies"
         case .mail(let hit) where hit.isUnread:
             "unread"
+        // A locked note is in the results on its title alone — saying so is the difference
+        // between "there is nothing in it" and "Scout cannot read what is in it".
+        case .note(let hit) where hit.isLocked:
+            "locked"
+        case .reminder(let hit) where hit.isCompleted:
+            "done"
         default:
             nil
         }
@@ -140,6 +154,12 @@ struct PanelRowView: View {
 
         case .contact(let hit):
             return hit.detail.isEmpty ? "Contact" : hit.detail
+
+        case .note(let hit):
+            return hit.detail.isEmpty ? "Note" : hit.detail
+
+        case .reminder(let hit):
+            return hit.detail.isEmpty ? "Reminder" : hit.detail
         }
     }
 
@@ -151,6 +171,8 @@ struct PanelRowView: View {
         case .mail: "return to open in Mail"
         case .message: "return to open the conversation"
         case .contact: "return to open in Contacts"
+        case .note: "return to open in Notes"
+        case .reminder: "return to open in Reminders"
         }
     }
 }

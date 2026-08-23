@@ -10,6 +10,150 @@ import Foundation
 /// It reports shapes and counts only. No subject, address or message text is ever written out.
 public enum Diagnostics {
 
+    /// What Notes and Reminders actually look like on this Mac.
+    ///
+    /// Shapes and counts only — never a note title, a reminder, or a word out of either. The
+    /// questions worth asking are whether Apple's column names are where Scout expects them,
+    /// whether the compressed bodies decode, and whether the identifiers are the shape the deep
+    /// links need.
+    public static func probeNotesAndReminders(
+        _ term: String,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) async -> String {
+        var lines = ["Notes & Reminders probe for \"\(term)\"", "================================", ""]
+
+        // ---- Notes ----
+        lines.append("NOTES")
+        let source = NotesIndex.defaultSource(home: home)
+        lines.append("store readable: \(StoreAccess.canRead(file: source) ? "yes" : "no — needs Full Disk Access")")
+
+        if let db = try? SQLiteDatabase.openReadOnly(source, immutable: true) {
+            let columns = db.columns(of: "ZICCLOUDSYNCINGOBJECT")
+            lines.append("ZICCLOUDSYNCINGOBJECT columns: \(columns.count)")
+            for name in ["ZTITLE1", "ZTITLE2", "ZIDENTIFIER", "ZMODIFICATIONDATE1", "ZFOLDER",
+                         "ZNOTEDATA", "ZISPASSWORDPROTECTED", "ZMARKEDFORDELETION"] {
+                lines.append("  \(name): \(columns.contains(name) ? "present" : "MISSING")")
+            }
+            let accounts = columns.filter { $0.hasPrefix("ZACCOUNT") }.sorted()
+            lines.append("  account columns: \(accounts.joined(separator: ", "))")
+
+            func count(_ label: String, _ sql: String) {
+                guard let statement = try? db.prepare(sql) else {
+                    lines.append("\(label): could not run — \(db.lastErrorMessage)")
+                    return
+                }
+                lines.append("\(label): \((try? statement.step()) == true ? String(statement.int64(0)) : "?")")
+            }
+            count("note rows", "SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT WHERE ZNOTEDATA IS NOT NULL")
+            count("marked for deletion", "SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT WHERE ZNOTEDATA IS NOT NULL AND ZMARKEDFORDELETION = 1")
+            count("password protected", "SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT WHERE ZNOTEDATA IS NOT NULL AND ZISPASSWORDPROTECTED = 1")
+            count("ZICNOTEDATA rows", "SELECT COUNT(*) FROM ZICNOTEDATA")
+            count("body blobs stored", "SELECT COUNT(*) FROM ZICNOTEDATA WHERE ZDATA IS NOT NULL")
+
+            // Which way round the note-to-body link actually goes. Mail taught this lesson once
+            // already: a join on the wrong column does not fail, it silently returns nothing.
+            count("joined on d.ZNOTE = n.Z_PK (what Scout does)", """
+                SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT n
+                JOIN ZICNOTEDATA d ON d.ZNOTE = n.Z_PK
+                WHERE n.ZNOTEDATA IS NOT NULL AND d.ZDATA IS NOT NULL
+            """)
+            count("joined on d.Z_PK = n.ZNOTEDATA (the other way)", """
+                SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT n
+                JOIN ZICNOTEDATA d ON d.Z_PK = n.ZNOTEDATA
+                WHERE d.ZDATA IS NOT NULL
+            """)
+            count("notes whose body row exists but is empty", """
+                SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT n
+                JOIN ZICNOTEDATA d ON d.ZNOTE = n.Z_PK
+                WHERE n.ZNOTEDATA IS NOT NULL AND d.ZDATA IS NULL
+            """)
+
+            // Husks: rows Notes leaves behind with no title and no body. They can never match
+            // anything, and counting them makes the lane look bigger than it is.
+            count("husks (no title, no body)", """
+                SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT n
+                LEFT JOIN ZICNOTEDATA d ON d.ZNOTE = n.Z_PK
+                WHERE n.ZNOTEDATA IS NOT NULL AND d.ZDATA IS NULL
+                  AND (n.ZTITLE1 IS NULL OR n.ZTITLE1 = '')
+            """)
+
+            // The one that matters: does the gzip-and-protobuf decode actually work here, or is
+            // the lane about to index a few thousand empty bodies?
+            if let sample = try? db.prepare("SELECT ZDATA FROM ZICNOTEDATA WHERE ZDATA IS NOT NULL LIMIT 200") {
+                var tried = 0, gunzipped = 0, decoded = 0, characters = 0
+                while (try? sample.step()) == true {
+                    guard let blob = sample.blob(0) else { continue }
+                    tried += 1
+                    guard let inflated = Gzip.inflate(blob) else { continue }
+                    gunzipped += 1
+                    guard let text = NoteProtobuf.text(in: inflated) else { continue }
+                    decoded += 1
+                    characters += text.count
+                }
+                lines.append("sampled bodies: \(tried), un-gzipped: \(gunzipped), text recovered: \(decoded)")
+                lines.append("  average recovered length: \(decoded > 0 ? characters / decoded : 0) characters")
+            }
+
+            // Identifier shape, because the deep link is built out of it.
+            if let sample = try? db.prepare("SELECT ZIDENTIFIER FROM ZICCLOUDSYNCINGOBJECT WHERE ZNOTEDATA IS NOT NULL AND ZIDENTIFIER IS NOT NULL LIMIT 5") {
+                var shapes: [String] = []
+                while (try? sample.step()) == true {
+                    let value = sample.string(0) ?? ""
+                    shapes.append("len \(value.count), uuid: \(UUID(uuidString: value) != nil ? "yes" : "no")")
+                }
+                lines.append("identifier shape: \(shapes.joined(separator: "; "))")
+            }
+        } else {
+            lines.append("could not open the Notes database")
+        }
+
+        let notes = NotesIndex(source: source)
+        do {
+            let changed = try notes.sync()
+            let page = try notes.search(term, limit: 40)
+            lines.append("NotesIndex.sync changed: \(changed)")
+            lines.append("NotesIndex holds: \(try notes.indexedCount()) notes")
+            lines.append("NotesIndex.search returned: \(page.items.count) of \(page.total)")
+            lines.append("  openable in Notes: \(page.items.filter { $0.openURL != nil }.count)")
+            lines.append("  locked: \(page.items.filter(\.isLocked).count)")
+            lines.append("  with a folder: \(page.items.filter { $0.folder != nil }.count)")
+            lines.append("  with a date: \(page.items.filter { $0.modified != nil }.count)")
+            // A preview, not proof of where the match was: FTS5 hands back the head of the body
+            // when the match was in the title.
+            lines.append("  with a body preview: \(page.items.filter { $0.snippet != nil }.count)")
+
+            // The number that says whether the lane is really searching notes or only naming
+            // them: how many went in with a title and nothing else.
+            if let db = try? SQLiteDatabase.openReadOnly(NotesIndex.defaultIndexLocation(home: home)),
+               let counter = try? db.prepare("SELECT COUNT(*) FROM notes WHERE body = ''"),
+               (try? counter.step()) == true {
+                lines.append("indexed with no searchable text at all: \(counter.int64(0))")
+            }
+        } catch {
+            lines.append("NotesIndex failed: \(error)")
+        }
+
+        // ---- Reminders ----
+        lines.append("")
+        lines.append("REMINDERS")
+        let searcher = ReminderSearcher()
+        lines.append("access: \(searcher.access)")
+
+        let records = await searcher.loadAll()
+        lines.append("reminders read: \(records.count)")
+        lines.append("  with a title: \(records.filter { !$0.title.isEmpty }.count)")
+        lines.append("  with a list: \(records.filter { !$0.list.isEmpty }.count)")
+        lines.append("  with notes on them: \(records.filter { !$0.body.isEmpty }.count)")
+        lines.append("  completed: \(records.filter(\.hit.isCompleted).count)")
+        lines.append("  with a due date: \(records.filter { $0.hit.due != nil }.count)")
+        lines.append("  identifiers that are UUIDs (so the deep link works): \(records.filter { $0.hit.openURL != nil }.count)")
+
+        let page = ReminderIndex(records: records).search(term, limit: 40)
+        lines.append("ReminderIndex.search returned: \(page.items.count) of \(page.total)")
+
+        return lines.joined(separator: "\n")
+    }
+
     /// Counts only — how many rows a given word would match through each candidate join. Enough
     /// to tell a wrong query from an empty mailbox, without a single subject or address leaving
     /// the machine.

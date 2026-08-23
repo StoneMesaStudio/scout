@@ -194,7 +194,21 @@ private func folder(_ path: String, modified: Date? = nil) -> SearchResult {
 @Suite struct LaneTests {
 
     @Test func everyLaneHasItsOwnNumber() {
-        #expect(SearchLane.allCases.map(\.shortcut) == ["1", "2", "3", "4", "5", "6"])
+        #expect(SearchLane.allCases.map(\.shortcut) == ["1", "2", "3", "4", "5", "6", "7", "8"])
+    }
+
+    /// The first six numbers are muscle memory. Notes and Reminders were added at the end so
+    /// that ⌘5 still means Apps — this test is what stops a tidy-minded reordering from quietly
+    /// breaking that for everyone.
+    @Test func theOriginalSixKeepTheirNumbers() {
+        #expect(SearchLane.files.shortcut == "1")
+        #expect(SearchLane.contacts.shortcut == "2")
+        #expect(SearchLane.mail.shortcut == "3")
+        #expect(SearchLane.messages.shortcut == "4")
+        #expect(SearchLane.apps.shortcut == "5")
+        #expect(SearchLane.system.shortcut == "6")
+        #expect(SearchLane.notes.shortcut == "7")
+        #expect(SearchLane.reminders.shortcut == "8")
     }
 
     @Test func onlyFilesHasScopes() {

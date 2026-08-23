@@ -18,16 +18,30 @@ but it does its own filtering and its own ordering, which is the part Apple does
 - Duplicate collapsing, reveal in Finder on ⌘Return, Tab to search inside a folder.
 - One exact app-name match pins to the top, so typing "Mail" and pressing Return still launches Mail.
 
-**Mail ⌘2** — subject, sender and body, from the Spotlight index Apple's own importer fills.
+**Contacts ⌘2** — every field on the card, matched here rather than by Apple's name predicate,
+which returns names that merely sound like the one you typed and misses ones that don't.
 
-**Messages ⌘3** — Scout's own full-text index, because macOS barely indexes texts. It reads
+**Mail ⌘3** — subject and sender from Mail's own Envelope Index, plus what the messages actually
+say, from an index Scout builds over the message files.
+
+**Messages ⌘4** — Scout's own full-text index, because macOS barely indexes texts. It reads
 `chat.db` read-only, recovers text from the styled blobs recent macOS leaves the plain column
 empty for, and tops itself up incrementally.
 
-**Apps ⌘4** — ordered by what you actually launch, not alphabetically.
+**Apps ⌘5** — ordered by what you actually launch, not alphabetically.
 
-**System ⌘5** — the settings panes this Mac has, found by scanning rather than from a list that
+**System ⌘6** — the settings panes this Mac has, found by scanning rather than from a list that
 rots, with keywords so "full disk access" finds Privacy & Security.
+
+**Notes ⌘7** — the words inside your notes, not just their titles. Notes stores its text as a
+gzipped protobuf in a Core Data database with no read API, which is why nothing outside Notes.app
+can search it — Spotlight included. Scout ungzips it, keeps its own index, and re-reads a note
+whenever it changes. Locked notes stay locked: only their titles are searchable, and the row says
+so rather than pretending the note is empty.
+
+**Reminders ⌘8** — by title, by list, or by the note attached. EventKit has no text search for
+reminders at all, so Scout reads them and matches here. What is still outstanding sorts above what
+is done, and what is done is still findable.
 
 Results never blend across lanes. A file search returns files.
 
@@ -58,15 +72,20 @@ terms of a real search.
 
 ## Permissions
 
-Two things Scout cannot do for itself, both explained on first run:
+What macOS makes you allow, and what Scout can and cannot ask for itself — all of it explained
+on first run and listed again under Settings › Permissions:
 
 - **⌘-Space** belongs to Spotlight until the user unticks it in Keyboard Shortcuts. ⌥-Space works
   from the first launch either way.
-- **Full Disk Access** is required for the Mail and Messages lanes. Without it those lanes say so
-  and offer the settings pane, rather than showing an empty list that reads as "nothing found".
+- **Full Disk Access** is required for the Mail, Messages and Notes lanes. Without it those lanes
+  say so and offer the settings pane, rather than showing an empty list that reads as "nothing
+  found".
+- **Contacts** and **Reminders** are the two an app is allowed to ask about itself. Scout does not
+  ask while you are typing — a prompt that appears by itself is one people dismiss without reading.
+  The lane shows a notice with a button, so the prompt arrives because you asked for it.
 
 ## Why it isn't on the App Store
 
 Sandboxing is mandatory there, and a sandboxed app can only see files handed to it one at a time
-through an open panel. Full Disk Access — which the Mail and Messages lanes need — cannot be
-granted to a sandboxed app at all. Scout ships as a signed, notarized direct download instead.
+through an open panel. Full Disk Access — which the Mail, Messages and Notes lanes need — cannot
+be granted to a sandboxed app at all. Scout ships as a signed, notarized direct download instead.

@@ -26,10 +26,21 @@ final class ScoutSettings {
         excludeSystemFolders = store.object(forKey: Key.excludeSystem) as? Bool ?? true
         pinExactAppMatch = store.object(forKey: Key.pinExactAppMatch) as? Bool ?? true
 
-        // Files, Contacts, Mail, Messages and Apps on; System off, because it is the one people
-        // reach for deliberately rather than constantly.
+        // Files, Contacts, Mail, Messages, Apps, Notes and Reminders on; System off, because it
+        // is the one people reach for deliberately rather than constantly.
         let saved = store.stringArray(forKey: Key.enabledLanes)?.compactMap(SearchLane.init(rawValue:))
-        enabledLanes = Set(saved ?? [.files, .contacts, .mail, .messages, .apps])
+        var lanes = Set(saved ?? Self.defaultLanes)
+
+        // A source added after someone started using Scout is not in their saved set, so without
+        // this it would ship switched off and look like it was never built. Each new batch bumps
+        // the version and is added once; anything they then switch off stays off.
+        let version = store.integer(forKey: Key.enabledLanesVersion)
+        if saved != nil, version < Self.lanesVersion {
+            lanes.formUnion([.notes, .reminders])
+            store.set(lanes.map(\.rawValue), forKey: Key.enabledLanes)
+        }
+        store.set(Self.lanesVersion, forKey: Key.enabledLanesVersion)
+        enabledLanes = lanes
         hasSeenWelcome = store.bool(forKey: Key.hasSeenWelcome)
         hideCommandSpaceHint = store.bool(forKey: Key.hideCommandSpaceHint)
         searchMailBodies = store.object(forKey: Key.searchMailBodies) as? Bool ?? true
@@ -50,11 +61,18 @@ final class ScoutSettings {
         static let excludeSystem = "excludeSystemFolders"
         static let pinExactAppMatch = "pinExactAppMatch"
         static let enabledLanes = "enabledLanes"
+        static let enabledLanesVersion = "enabledLanesVersion"
         static let hasSeenWelcome = "hasSeenWelcome"
         static let panelFrame = "panelFrame"
         static let hideCommandSpaceHint = "hideCommandSpaceHint"
         static let searchMailBodies = "searchMailBodies"
     }
+
+    /// What a Mac that has never run Scout starts with.
+    private static let defaultLanes: [SearchLane] = [.files, .contacts, .mail, .messages, .apps, .notes, .reminders]
+
+    /// Bumped whenever a source is added, so existing installs pick it up exactly once.
+    private static let lanesVersion = 2
 
     /// Which scope the panel opens on.
     var defaultScope: SearchScope {

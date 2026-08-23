@@ -102,6 +102,23 @@ final class SQLiteDatabase {
         statement.bind(name, at: 1)
         return (try? statement.step()) == true
     }
+
+    /// Which columns a table actually has.
+    ///
+    /// Needed for Apple's own databases, whose column names move between macOS releases. Asking
+    /// first and picking whichever name is present beats hardcoding one and shipping a lane that
+    /// goes silent the next time Notes is rewritten.
+    func columns(of table: String) -> Set<String> {
+        // PRAGMA takes no parameters, so the name is quoted rather than bound.
+        guard let statement = try? prepare("PRAGMA table_info(\"\(table.replacingOccurrences(of: "\"", with: ""))\")") else {
+            return []
+        }
+        var names: Set<String> = []
+        while (try? statement.step()) == true {
+            if let name = statement.string(1) { names.insert(name) }
+        }
+        return names
+    }
 }
 
 /// One prepared statement. Stepping returns false when there are no more rows.
@@ -132,6 +149,12 @@ final class SQLiteStatement {
         sqlite3_bind_int64(handle, index, value)
     }
 
+    // Named rather than overloaded: with `bind(_:at:)` taking both Int64 and Double, every
+    // `bind(1, at: 3)` elsewhere in the codebase became ambiguous.
+    func bindDouble(_ value: Double, at index: Int32) {
+        sqlite3_bind_double(handle, index, value)
+    }
+
     func bindBlob(_ value: Data, at index: Int32) {
         value.withUnsafeBytes { buffer in
             _ = sqlite3_bind_blob(handle, index, buffer.baseAddress, Int32(buffer.count), Self.transient)
@@ -159,6 +182,16 @@ final class SQLiteStatement {
 
     func int64(_ column: Int32) -> Int64 {
         sqlite3_column_int64(handle, column)
+    }
+
+    func double(_ column: Int32) -> Double {
+        sqlite3_column_double(handle, column)
+    }
+
+    /// True when the column holds SQL NULL, which is different from holding zero — a note that
+    /// has never been modified and a missing column read the same otherwise.
+    func isNull(_ column: Int32) -> Bool {
+        sqlite3_column_type(handle, column) == SQLITE_NULL
     }
 
     func bool(_ column: Int32) -> Bool {

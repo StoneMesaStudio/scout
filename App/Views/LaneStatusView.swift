@@ -4,9 +4,9 @@ import ScoutCore
 
 /// Shown in place of results when a lane cannot answer yet, and why.
 ///
-/// Mail and Messages both need Full Disk Access — a permission macOS gives no way to request from
-/// inside an app. All Scout can do is say plainly what is missing and open the right settings
-/// pane, rather than showing an empty list that looks like "nothing found".
+/// Mail, Messages and Notes all need Full Disk Access — a permission macOS gives no way to
+/// request from inside an app. All Scout can do is say plainly what is missing and open the right
+/// settings pane, rather than showing an empty list that looks like "nothing found".
 struct LaneStatusView: View {
 
     let status: LaneStatus
@@ -32,8 +32,8 @@ struct LaneStatusView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                if status == .contactsNotAsked {
-                    Button("Allow Contacts…") { onRequestAccess?() }
+                if let askTitle {
+                    Button(askTitle) { onRequestAccess?() }
                         .buttonStyle(.link)
                         .font(.system(size: 12))
                         .padding(.top, 1)
@@ -53,6 +53,15 @@ struct LaneStatusView: View {
         .padding(.vertical, 16)
     }
 
+    /// The two permissions an app is allowed to ask about itself get a button that asks.
+    private var askTitle: String? {
+        switch status {
+        case .contactsNotAsked: "Allow Contacts…"
+        case .remindersNotAsked: "Allow Reminders…"
+        default: nil
+        }
+    }
+
     /// The settings pane that would fix this, when one would.
     private var permissionPane: (title: String, url: String)? {
         switch status {
@@ -62,6 +71,9 @@ struct LaneStatusView: View {
         case .contactsDenied:
             ("Open Contacts permissions",
              "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Contacts")
+        case .remindersDenied:
+            ("Open Reminders permissions",
+             "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Reminders")
         default:
             nil
         }
@@ -69,7 +81,7 @@ struct LaneStatusView: View {
 
     private var symbol: String {
         switch status {
-        case .contactsNotAsked, .contactsDenied: "lock"
+        case .contactsNotAsked, .contactsDenied, .remindersNotAsked, .remindersDenied: "lock"
         case .needsFullDiskAccess: "lock"
         case .building: "clock"
         case .failed: "exclamationmark.triangle"
@@ -79,9 +91,20 @@ struct LaneStatusView: View {
 
     private var tint: Color {
         switch status {
-        case .needsFullDiskAccess, .contactsNotAsked, .contactsDenied, .building: .secondary
+        case .needsFullDiskAccess, .contactsNotAsked, .contactsDenied,
+             .remindersNotAsked, .remindersDenied, .building: .secondary
         case .failed: .orange
         case .ready: .secondary
+        }
+    }
+
+    /// The user's word for what the lane reads. "Scout can't read your Notes yet" is a sentence
+    /// about an app; "your notes" is a sentence about their things.
+    private static func store(for lane: SearchLane) -> String {
+        switch lane {
+        case .mail: "mail"
+        case .notes: "notes"
+        default: "messages"
         }
     }
 
@@ -91,10 +114,14 @@ struct LaneStatusView: View {
             "Scout hasn’t asked for your contacts yet"
         case .contactsDenied:
             "Scout isn’t allowed to read your contacts"
+        case .remindersNotAsked:
+            "Scout hasn’t asked for your reminders yet"
+        case .remindersDenied:
+            "Scout isn’t allowed to read your reminders"
         case .needsFullDiskAccess:
-            "Scout can’t read your \(lane == .mail ? "mail" : "messages") yet"
+            "Scout can’t read your \(Self.store(for: lane)) yet"
         case .building:
-            "Reading your message history…"
+            "Reading your \(lane == .notes ? "notes" : "message history")…"
         case .failed:
             "That didn’t work"
         case .ready:
@@ -108,10 +135,14 @@ struct LaneStatusView: View {
             "One click and macOS will ask. Nothing leaves this Mac."
         case .contactsDenied:
             "Turn Scout on in Privacy & Security › Contacts. Nothing leaves this Mac."
+        case .remindersNotAsked:
+            "One click and macOS will ask. Nothing leaves this Mac."
+        case .remindersDenied:
+            "Turn Scout on in Privacy & Security › Reminders. Nothing leaves this Mac."
         case .needsFullDiskAccess:
-            "macOS keeps mail and messages locked away until you allow it. Turn on Scout in Full Disk Access, then come back — you only do this once."
+            "macOS keeps \(Self.store(for: lane)) locked away until you allow it. Turn on Scout in Full Disk Access, then come back — you only do this once."
         case .building:
-            "The first read goes through your whole history. After that it only picks up what’s new."
+            "The first read goes through everything you have. After that it only picks up what’s new."
         case .failed(let reason):
             reason
         case .ready:
