@@ -18,3 +18,7 @@ Package.resolved
 
 # Local Claude settings
 .claude/settings.local.json
+
+# Release artefacts — bin/release.sh writes the notarised DMG here. The shipped copy lives
+# in the website repo, not this one.
+dist/
