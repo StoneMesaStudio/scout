@@ -34,6 +34,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: studio.stonemesa.scout
         PRODUCT_NAME: Scout
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
         # Partial plist merged into the generated one — carries LSUIElement, which is what
         # keeps Scout out of the Dock and the app switcher.
