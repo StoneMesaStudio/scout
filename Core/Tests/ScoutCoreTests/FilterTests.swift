@@ -194,21 +194,39 @@ private func folder(_ path: String, modified: Date? = nil) -> SearchResult {
 @Suite struct LaneTests {
 
     @Test func everyLaneHasItsOwnNumber() {
-        #expect(SearchLane.allCases.map(\.shortcut) == ["1", "2", "3", "4", "5", "6", "7", "8"])
+        #expect(SearchLane.allCases.map(\.defaultShortcut) == ["1", "2", "3", "4", "5", "6", "7", "8"])
     }
 
-    /// The first six numbers are muscle memory. Notes and Reminders were added at the end so
-    /// that ⌘5 still means Apps — this test is what stops a tidy-minded reordering from quietly
-    /// breaking that for everyone.
-    @Test func theOriginalSixKeepTheirNumbers() {
-        #expect(SearchLane.files.shortcut == "1")
-        #expect(SearchLane.contacts.shortcut == "2")
-        #expect(SearchLane.mail.shortcut == "3")
-        #expect(SearchLane.messages.shortcut == "4")
-        #expect(SearchLane.apps.shortcut == "5")
-        #expect(SearchLane.system.shortcut == "6")
-        #expect(SearchLane.notes.shortcut == "7")
-        #expect(SearchLane.reminders.shortcut == "8")
+    /// The first six numbers are muscle memory for anyone who never reorders. Notes and Reminders
+    /// were added at the end so ⌘5 still means Apps — this test is what stops a tidy-minded
+    /// reordering of the enum from quietly breaking that for everyone.
+    @Test func theOriginalSixKeepTheirNumbersByDefault() {
+        #expect(SearchLane.files.defaultShortcut == "1")
+        #expect(SearchLane.contacts.defaultShortcut == "2")
+        #expect(SearchLane.mail.defaultShortcut == "3")
+        #expect(SearchLane.messages.defaultShortcut == "4")
+        #expect(SearchLane.apps.defaultShortcut == "5")
+        #expect(SearchLane.system.defaultShortcut == "6")
+        #expect(SearchLane.notes.defaultShortcut == "7")
+        #expect(SearchLane.reminders.defaultShortcut == "8")
+    }
+
+    @Test func asavedOrderIsHonouredExactly() {
+        let saved = ["notes", "files", "mail"]
+        let ordered = SearchLane.ordered(from: saved)
+        #expect(ordered.prefix(3) == [.notes, .files, .mail])
+    }
+
+    @Test func aSourceAddedLaterArrivesAtTheEndOfYourOwnOrder() {
+        // The whole set, arranged by hand, from a version that had no Reminders.
+        let saved = ["notes", "files", "mail", "messages", "apps", "system", "contacts"]
+        #expect(SearchLane.ordered(from: saved).last == .reminders)
+        #expect(SearchLane.ordered(from: saved).count == SearchLane.allCases.count)
+    }
+
+    @Test func nonsenseInTheSavedOrderIsIgnoredRatherThanLosingASource() {
+        #expect(SearchLane.ordered(from: ["telepathy", "files", "files"]).count == SearchLane.allCases.count)
+        #expect(SearchLane.ordered(from: []).first == .files)
     }
 
     @Test func onlyFilesHasScopes() {

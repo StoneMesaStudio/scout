@@ -133,11 +133,80 @@ final class SearchModel {
     var enabledLanes: Set<SearchLane> {
         get { settings.enabledLanes }
         set {
-            // At least one source has to stay on, or the panel has nothing to do.
-            guard !newValue.isEmpty else { return }
+            // Zero sources is allowed. Switching everything off and then clicking the one you
+            // want beats switching seven off one at a time, and the panel says plainly that
+            // nothing is on rather than looking broken.
             settings.enabledLanes = newValue
             runSearch()
         }
+    }
+
+    /// The sources in the order the user has arranged them, which is also the order their
+    /// results appear in.
+    var orderedLanes: [SearchLane] { settings.laneOrder }
+
+    /// The number on a source's button: where it sits, not what it is.
+    func number(for lane: SearchLane) -> Int? {
+        orderedLanes.firstIndex(of: lane).map { $0 + 1 }
+    }
+
+    var allLanesAreOn: Bool { enabledLanes.count == SearchLane.allCases.count }
+
+    var noLanesAreOn: Bool { enabledLanes.isEmpty }
+
+    /// Set when one source has been opened out on its own from its heading.
+    private(set) var soloedLane: SearchLane?
+    /// What was on before that, so Escape can put it back.
+    private var previousLanes: Set<SearchLane>?
+
+    /// Show one source by itself, with far more of it.
+    ///
+    /// This is the answer to a long list: rather than scrolling past four sources to reach the
+    /// files, take the one you meant and see all of it.
+    func soloLane(_ lane: SearchLane) {
+        if soloedLane == nil { previousLanes = enabledLanes }
+        soloedLane = lane
+        // The setter runs the search, which reads the raised limit below through `limit(for:)`.
+        enabledLanes = [lane]
+    }
+
+    /// Put back whatever was on before a source was opened out on its own.
+    func showAllSources() {
+        guard let restored = previousLanes else { return }
+        soloedLane = nil
+        previousLanes = nil
+        enabledLanes = restored
+    }
+
+    /// Turn every source on, or every source off.
+    func setAllLanes(_ on: Bool) {
+        clearSolo()
+        enabledLanes = on ? Set(SearchLane.allCases) : []
+    }
+
+    /// Move a source to sit where another one is. The results follow the buttons.
+    func moveLane(_ lane: SearchLane, before target: SearchLane) {
+        guard settings.moveLane(lane, before: target) else { return }
+        rebuildSections()
+    }
+
+    /// Put the buttons back the way they shipped.
+    func resetLaneOrder() {
+        settings.resetLaneOrder()
+        rebuildSections()
+    }
+
+    private func clearSolo() {
+        soloedLane = nil
+        previousLanes = nil
+    }
+
+    /// Put the sources back without kicking off a search — for the moments the panel is closing
+    /// or reopening and is about to do that anyway.
+    private func restoreLanesQuietly() {
+        guard let restored = previousLanes else { return }
+        clearSolo()
+        settings.enabledLanes = restored
     }
 
     /// Every row across every section, in the order they are drawn — what the arrow keys walk.
@@ -202,25 +271,25 @@ final class SearchModel {
     private var mailIndexTask: Task<Void, Never>?
     private var selectedRowID: String?
 
-    /// How many of each source to show before offering the rest. Files get the room; the others
-    /// are there to answer a question, not to fill the panel — but every one of them can be
-    /// opened out, because "6 of 2,367" is only useful if the other 2,361 are reachable.
-    static func defaultLimit(for lane: SearchLane) -> Int {
-        switch lane {
-        case .files: 25
-        case .contacts, .mail, .messages, .notes, .reminders: 12
-        case .apps, .system: 8
-        }
-    }
-
     /// How many more to add each time the rest are asked for.
     private let pageSize = 50
+
+    /// How much a source opened out on its own shows at once.
+    ///
+    /// Not everything. The results list is a plain stack rather than a lazy one — a lazy one
+    /// recycled rows into the wrong views — so two thousand rows would take seconds to draw. Two
+    /// hundred at a time, with Show more right underneath, is the honest version of "all of it".
+    private let soloLimit = 200
 
     private var laneLimits: [SearchLane: Int] = [:]
     private var laneTotals: [SearchLane: Int] = [:]
 
+    /// How many of this source to show. One number for all eight, chosen in Settings — the point
+    /// of the panel is a list you can take in at a glance, with the rest one click away.
     func limit(for lane: SearchLane) -> Int {
-        laneLimits[lane] ?? Self.defaultLimit(for: lane)
+        if let asked = laneLimits[lane] { return asked }
+        if soloedLane == lane { return soloLimit }
+        return settings.resultsPerSource
     }
 
     /// Show more of one source. Files, apps and settings are already in hand so they just
@@ -229,7 +298,7 @@ final class SearchModel {
         // Selection is an index into a flat list, so growing a section above the cursor would
         // slide the highlight onto somebody else's row. Remember what was selected, not where.
         selectedRowID = selectedRow?.id
-        laneLimits[lane] = limit(for: lane) + pageSize
+        laneLimits[lane] = limit(for: lane) + (soloedLane == lane ? soloLimit : pageSize)
         let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
 
         switch lane {
@@ -245,6 +314,7 @@ final class SearchModel {
     /// Contacts changing under us — someone added in Contacts.app, or a card edited — otherwise
     /// would not be findable until the five-minute cache expired.
     private var contactChangeObserver: NSObjectProtocol?
+
     /// Same problem for reminders: one ticked off in Reminders would keep showing as outstanding
     /// until the cache expired.
     private var reminderChangeObserver: NSObjectProtocol?
@@ -276,6 +346,7 @@ final class SearchModel {
     // MARK: - Lifecycle
 
     func reset() {
+        restoreLanesQuietly()
         spotlightOwnsCommandSpace = SpotlightShortcut.isEnabled
         laneLimits.removeAll()
         laneTotals.removeAll()
@@ -301,6 +372,10 @@ final class SearchModel {
     }
 
     func stop() {
+        // Opening one source out on its own is a drill, not a preference. Left in place it would
+        // be written to disk as "only Mail is on", and the next launch would look like seven
+        // sources had switched themselves off.
+        restoreLanesQuietly()
         debounce?.cancel()
         messageTask?.cancel()
         mailTask?.cancel()
@@ -563,7 +638,7 @@ final class SearchModel {
     private func rebuildSections() {
         var built: [PanelSection] = []
 
-        for lane in SearchLane.allCases where enabledLanes.contains(lane) {
+        for lane in orderedLanes where enabledLanes.contains(lane) {
             switch lane {
             case .files:
                 let rows = fileRows()
@@ -595,8 +670,10 @@ final class SearchModel {
             }
         }
 
-        // A section with neither results nor anything to say is not worth a heading.
-        sections = built.filter { !$0.rows.isEmpty || $0.status != .ready }
+        // A section with neither results nor anything to say is not worth a heading — except the
+        // one opened out on its own, whose heading carries the only way back. Dropping it left a
+        // search that matched nothing looking like a dead end.
+        sections = built.filter { !$0.rows.isEmpty || $0.status != .ready || $0.lane == soloedLane }
         rebuildDisplayItems()
         selection = min(selection, max(0, rowCount - 1))
     }
@@ -678,16 +755,35 @@ final class SearchModel {
     }
 
     func toggleLane(_ lane: SearchLane) {
+        // Touching the switches by hand ends the "show only this one" state; otherwise Escape
+        // would later put back a set the user had already moved on from.
+        clearSolo()
         var updated = enabledLanes
         if updated.contains(lane) { updated.remove(lane) } else { updated.insert(lane) }
         enabledLanes = updated
     }
 
-    /// ⌘1 … ⌘6 toggle a source on or off.
+    /// ⌘1 … ⌘8 toggle a source on or off, by where its button sits.
     func toggleLane(number: Int) {
-        let lanes = SearchLane.allCases
+        let lanes = orderedLanes
         guard number >= 1, number <= lanes.count else { return }
         toggleLane(lanes[number - 1])
+    }
+
+    /// ⌥↓ and ⌥↑ jump from one section's first result to the next, which is how you get past a
+    /// hundred files without holding the arrow key down.
+    func moveToSection(by delta: Int) {
+        let starts = sections.filter { !$0.rows.isEmpty }.map { startIndex(of: $0) }
+        guard !starts.isEmpty else { return }
+
+        var current = 0
+        for (index, start) in starts.enumerated() where selection >= start { current = index }
+
+        // Going up from partway down a section lands at the top of that section first, the way a
+        // paragraph jump does in a text editor.
+        var target = current + delta
+        if delta < 0, selection > starts[current] { target = current }
+        selection = starts[(target + starts.count) % starts.count]
     }
 
     /// The row index at which a section starts, for drawing the selection.
@@ -790,6 +886,8 @@ final class SearchModel {
     func escape() {
         if !filter.isEmpty {
             filter.clear()
+        } else if previousLanes != nil {
+            showAllSources()
         } else if focusedFolder != nil {
             focusedFolder = nil
             runSearch()

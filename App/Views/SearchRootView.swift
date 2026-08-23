@@ -6,6 +6,7 @@ import ScoutCore
 struct SearchRootView: View {
 
     @Bindable var model: SearchModel
+    @State private var settings = ScoutSettings.shared
     @FocusState private var fieldFocused: Bool
 
     var body: some View {
@@ -28,7 +29,9 @@ struct SearchRootView: View {
             // The results area always claims the space left over, so the panel keeps its shape
             // whether it is showing sixty rows, none, or nothing typed yet.
             Group {
-                if !model.displayItems.isEmpty {
+                if model.noLanesAreOn {
+                    noSourcesState
+                } else if !model.displayItems.isEmpty {
                     results
                 } else if !model.text.isEmpty {
                     emptyState
@@ -67,8 +70,17 @@ struct SearchRootView: View {
         .padding(.horizontal, 20)
         .padding(.top, 16)
         .padding(.bottom, 11)
-        .onKeyPress(.downArrow) { model.moveSelection(by: 1); return .handled }
-        .onKeyPress(.upArrow) { model.moveSelection(by: -1); return .handled }
+        // ⌥ turns the arrows into a section jump, which is how you get past a hundred files
+        // without holding the key down.
+        .onKeyPress(keys: [.downArrow, .upArrow]) { press in
+            let down = press.key == .downArrow
+            if press.modifiers.contains(.option) {
+                model.moveToSection(by: down ? 1 : -1)
+            } else {
+                model.moveSelection(by: down ? 1 : -1)
+            }
+            return .handled
+        }
         .onKeyPress(.escape) { model.escape(); return .handled }
         .onKeyPress(.tab) { model.drillIntoSelection(); return .handled }
         // Return opens; ⌘Return reveals in the Finder instead. Handled together because
@@ -81,13 +93,16 @@ struct SearchRootView: View {
             }
             return .handled
         }
-        // ⌘L flips the file scope, ⌘1…⌘8 switch a source on or off.
-        .onKeyPress(keys: ["l", "1", "2", "3", "4", "5", "6", "7", "8"]) { press in
+        // ⌘L flips the file scope, ⌘1…⌘8 switch a source on or off, ⌘0 switches the lot.
+        .onKeyPress(keys: ["l", "0", "1", "2", "3", "4", "5", "6", "7", "8"]) { press in
             guard press.modifiers.contains(.command) else { return .ignored }
-            if press.key.character == "l" {
-                model.toggleScope()
-            } else if let number = Int(String(press.key.character)) {
-                model.toggleLane(number: number)
+            switch press.key.character {
+            case "l": model.toggleScope()
+            case "0": model.setAllLanes(!model.allLanesAreOn)
+            default:
+                if let number = Int(String(press.key.character)) {
+                    model.toggleLane(number: number)
+                }
             }
             return .handled
         }
@@ -106,20 +121,62 @@ struct SearchRootView: View {
             // across the panel at its minimum width, and a row that overflows silently loses
             // whichever sources happen to be last.
             SourceFlow(spacing: 7) {
-                ForEach(SearchLane.allCases) { lane in
+                ForEach(model.orderedLanes) { lane in
                     SourceButton(
                         lane: lane,
-                        isOn: model.enabledLanes.contains(lane)
-                    ) {
-                        model.toggleLane(lane)
-                    }
+                        number: model.number(for: lane),
+                        style: settings.sourceButtonStyle,
+                        isOn: model.enabledLanes.contains(lane),
+                        action: { model.toggleLane(lane) },
+                        onDropOfLane: { model.moveLane($0, before: lane) }
+                    )
                 }
             }
 
+            allOrNoneButton
             scopeControl
         }
         .padding(.horizontal, 17)
         .padding(.bottom, 12)
+        // The same menu Mail's toolbar has, in the same place: right-click the buttons.
+        .contextMenu {
+            Picker("Show", selection: $settings.sourceButtonStyle) {
+                ForEach(SourceButtonStyle.allCases) { style in
+                    Text(style.title).tag(style)
+                }
+            }
+            .pickerStyle(.inline)
+
+            Divider()
+            Button("Turn All Sources On") { model.setAllLanes(true) }
+            Button("Turn All Sources Off") { model.setAllLanes(false) }
+            Divider()
+            Button("Put the Sources Back in Order") { model.resetLaneOrder() }
+        }
+    }
+
+    /// One button, two jobs. Everything off is a real state — it is how you get to a single
+    /// source in two clicks instead of seven.
+    private var allOrNoneButton: some View {
+        Button {
+            model.setAllLanes(!model.allLanesAreOn)
+        } label: {
+            Text(model.allLanesAreOn ? "None" : "All")
+                .font(.system(size: 12, weight: .medium))
+                .frame(minWidth: 34)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .frame(minHeight: 28)
+                .background {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.quaternary)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.16))
+                }
+        }
+        .buttonStyle(.plain)
+        .help(model.allLanesAreOn ? "⌘0 — turn every source off" : "⌘0 — turn every source on")
     }
 
     /// The scope switch sits in the panel itself, not behind a menu — reaching it has to be
@@ -188,7 +245,14 @@ struct SearchRootView: View {
     private func itemView(_ item: PanelItem) -> some View {
         switch item {
         case .header(let lane, let count, let total):
-            SectionHeader(lane: lane, count: count, total: total)
+            SectionHeader(
+                lane: lane,
+                count: count,
+                total: total,
+                isSoloed: model.soloedLane == lane,
+                onSolo: { model.soloLane(lane) },
+                onShowAll: { model.showAllSources() }
+            )
 
         case .status(let lane, let status):
             LaneStatusView(status: status, lane: lane) {
@@ -283,6 +347,23 @@ struct SearchRootView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    /// Everything switched off. A deliberate state — it is how you get to one source in two
+    /// clicks — so it explains itself rather than looking like a search that found nothing.
+    private var noSourcesState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "square.dashed")
+                .font(.system(size: 26))
+                .foregroundStyle(.tertiary)
+            Text("No sources are switched on.")
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+            Button("Turn them all back on") { model.setAllLanes(true) }
+                .buttonStyle(.link)
+                .font(.system(size: 13))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     /// Before anything is typed. Says which sources are on, so an empty panel still answers the
     /// question "what is this about to search".
     private var idleState: some View {
@@ -303,7 +384,7 @@ struct SearchRootView: View {
     }
 
     private var sourceSummary: String {
-        let names = SearchLane.allCases
+        let names = model.orderedLanes
             .filter { model.enabledLanes.contains($0) }
             .map(\.title)
         guard !names.isEmpty else { return "No sources are switched on." }
@@ -319,6 +400,7 @@ struct SearchRootView: View {
             KeyHint("⌘return", "Reveal in Finder")
             KeyHint("tab", "Search inside folder")
             KeyHint("⌘1–8", "Sources")
+            KeyHint("⌥↑↓", "Section")
 
             Spacer()
 
@@ -443,23 +525,36 @@ private struct SourceFlow: Layout {
 
 /// A source switch. Drawn as a real button — raised, bordered, and obviously filled when on —
 /// because a row of bare words does not read as something you can press.
+///
+/// It is also draggable: the order of these buttons is the order the results appear in, and the
+/// number on each one is its position rather than its identity. A click still toggles, because a
+/// drag needs the mouse to actually move first.
 private struct SourceButton: View {
 
     let lane: SearchLane
+    let number: Int?
+    let style: SourceButtonStyle
     let isOn: Bool
     let action: () -> Void
+    /// Another source was dropped here — it should end up in this one's place.
+    let onDropOfLane: (SearchLane) -> Void
 
     @State private var hovering = false
+    @State private var targeted = false
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                Image(systemName: lane.symbol)
-                    .font(.system(size: 11, weight: .semibold))
-                Text(lane.title)
-                    .font(.system(size: 13, weight: .medium))
+                if style.showsIcon {
+                    Image(systemName: lane.symbol)
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                if style.showsText {
+                    Text(lane.title)
+                        .font(.system(size: 13, weight: .medium))
+                }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, style == .iconOnly ? 9 : 12)
             .padding(.vertical, 6)
             .frame(minHeight: 28)
             .background {
@@ -468,14 +563,36 @@ private struct SourceButton: View {
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(isOn ? Color.clear : Color.primary.opacity(hovering ? 0.28 : 0.16))
+                    .strokeBorder(border, lineWidth: targeted ? 2 : 1)
             }
             .foregroundStyle(isOn ? Color.white : .primary)
             .shadow(color: .black.opacity(isOn ? 0.18 : 0.06), radius: 1, y: 1)
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help("⌘\(lane.shortcut) — turn \(lane.title) \(isOn ? "off" : "on")")
+        .help(helpText)
+        .draggable(lane.rawValue) {
+            // What follows the cursor. Text alone, because the button's own fill reads as
+            // "switched on" and dragging one that is off should not look like turning it on.
+            Label(lane.title, systemImage: lane.symbol)
+                .padding(6)
+        }
+        .dropDestination(for: String.self) { items, _ in
+            // Validated rather than trusted: any dragged text lands here otherwise.
+            guard let dropped = items.first.flatMap(SearchLane.init(rawValue:)) else { return false }
+            onDropOfLane(dropped)
+            return true
+        } isTargeted: { targeted = $0 }
+    }
+
+    private var border: Color {
+        if targeted { return .accentColor }
+        return isOn ? .clear : Color.primary.opacity(hovering ? 0.28 : 0.16)
+    }
+
+    private var helpText: String {
+        let key = number.map { "⌘\($0) — " } ?? ""
+        return key + "turn \(lane.title) \(isOn ? "off" : "on"). Drag to reorder."
     }
 }
 
@@ -483,6 +600,10 @@ private struct SectionHeader: View {
     let lane: SearchLane
     let count: Int
     let total: Int
+    /// True when this source is already the only one showing.
+    let isSoloed: Bool
+    let onSolo: () -> Void
+    let onShowAll: () -> Void
 
     var body: some View {
         HStack(spacing: 7) {
@@ -501,12 +622,29 @@ private struct SectionHeader: View {
             Rectangle()
                 .fill(.quaternary)
                 .frame(height: 1)
+
+            // The way out of a long list: take the source you meant and drop the other seven.
+            if isSoloed {
+                link("Show all sources", action: onShowAll)
+            } else if count > 0 {
+                link("Show only \(lane.title)", action: onSolo)
+            }
         }
         .foregroundStyle(.secondary)
         .padding(.horizontal, 4)
         .padding(.top, 8)
         .padding(.bottom, 4)
         .background(.regularMaterial)
+    }
+
+    private func link(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 10.5, weight: .medium))
+                .underline()
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
     }
 }
 

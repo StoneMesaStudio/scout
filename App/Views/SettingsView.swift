@@ -55,6 +55,34 @@ private struct GeneralSettings: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Sources") {
+                Picker("Show at most:", selection: $settings.resultsPerSource) {
+                    ForEach(ScoutSettings.resultsPerSourceChoices, id: \.self) { count in
+                        Text("^[\(count) result](inflect: true) per source").tag(count)
+                    }
+                }
+                Text("Every heading has a “Show only” link that opens that one source out on its own, with far more of it — so this number is about what you skim, not what you can reach.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Picker("Buttons:", selection: $settings.sourceButtonStyle) {
+                    ForEach(SourceButtonStyle.allCases) { style in
+                        Text(style.title).tag(style)
+                    }
+                }
+                HStack {
+                    Text("Drag the buttons in the panel to reorder them; the results follow. Right-click them for this menu.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Put back in order") { settings.resetLaneOrder() }
+                        .buttonStyle(.link)
+                        .font(.caption)
+                }
+            }
+
             Section {
                 Toggle("Put an exactly-matching app at the top", isOn: $settings.pinExactAppMatch)
                 Text("Typing “Mail” and pressing return launches Mail, the way ⌘-Space always has.")

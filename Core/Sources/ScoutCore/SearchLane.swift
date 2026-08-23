@@ -6,9 +6,10 @@ import Foundation
 /// and contacts still shows three labelled groups rather than one interleaved pile. Which ones are
 /// on is remembered between searches.
 ///
-/// Notes and Reminders were added after the first six and are declared last on purpose: the
-/// number beside each source is its position in this list, so inserting them anywhere else would
-/// silently move ⌘5 from Apps to something else for everyone already using it.
+/// The order here is only the *default*. The user can drag the source buttons into any order they
+/// like, and the number beside each one is its position — so after a reorder ⌘1 is whatever they
+/// put first. Notes and Reminders are still declared last so that anyone who never reorders keeps
+/// the numbers they learned.
 public enum SearchLane: String, CaseIterable, Identifiable, Sendable {
     case files
     case contacts
@@ -48,9 +49,26 @@ public enum SearchLane: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// ⌘1 … ⌘8, in declaration order.
-    public var shortcut: String {
+    /// The number this source carries before anybody reorders anything.
+    ///
+    /// The live number comes from where the button actually sits, not from here — see
+    /// `ScoutSettings.orderedLanes`.
+    public var defaultShortcut: String {
         String((Self.allCases.firstIndex(of: self) ?? 0) + 1)
+    }
+
+    /// A saved order turned back into lanes.
+    ///
+    /// Anything unrecognised is dropped and anything missing is appended in declaration order, so
+    /// a source added in a later version arrives at the end of the user's own arrangement instead
+    /// of vanishing or shuffling everything they set up.
+    public static func ordered(from saved: [String]) -> [SearchLane] {
+        var result = saved.compactMap(SearchLane.init(rawValue:))
+        // Duplicates would draw the same button twice and give it two numbers.
+        var seen = Set<SearchLane>()
+        result = result.filter { seen.insert($0).inserted }
+        result += allCases.filter { !seen.contains($0) }
+        return result
     }
 
     /// Only the files lane has scopes; the rest search their whole store.

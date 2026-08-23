@@ -41,6 +41,10 @@ final class ScoutSettings {
         }
         store.set(Self.lanesVersion, forKey: Key.enabledLanesVersion)
         enabledLanes = lanes
+        laneOrder = SearchLane.ordered(from: store.stringArray(forKey: Key.laneOrder) ?? [])
+        resultsPerSource = store.object(forKey: Key.resultsPerSource) as? Int ?? Self.defaultResultsPerSource
+        sourceButtonStyle = SourceButtonStyle(rawValue: store.string(forKey: Key.sourceButtonStyle) ?? "")
+            ?? .iconAndText
         hasSeenWelcome = store.bool(forKey: Key.hasSeenWelcome)
         hideCommandSpaceHint = store.bool(forKey: Key.hideCommandSpaceHint)
         searchMailBodies = store.object(forKey: Key.searchMailBodies) as? Bool ?? true
@@ -62,6 +66,9 @@ final class ScoutSettings {
         static let pinExactAppMatch = "pinExactAppMatch"
         static let enabledLanes = "enabledLanes"
         static let enabledLanesVersion = "enabledLanesVersion"
+        static let laneOrder = "laneOrder"
+        static let resultsPerSource = "resultsPerSource"
+        static let sourceButtonStyle = "sourceButtonStyle"
         static let hasSeenWelcome = "hasSeenWelcome"
         static let panelFrame = "panelFrame"
         static let hideCommandSpaceHint = "hideCommandSpaceHint"
@@ -73,6 +80,14 @@ final class ScoutSettings {
 
     /// Bumped whenever a source is added, so existing installs pick it up exactly once.
     private static let lanesVersion = 2
+
+    /// How many results each source shows before offering the rest. Ten rather than twenty-five:
+    /// the point of the panel is a list you can take in at a glance, with the whole lot one click
+    /// away when you want it.
+    static let defaultResultsPerSource = 10
+
+    /// The numbers offered in Settings.
+    static let resultsPerSourceChoices = [5, 10, 15, 25, 50]
 
     /// Which scope the panel opens on.
     var defaultScope: SearchScope {
@@ -97,8 +112,47 @@ final class ScoutSettings {
     }
 
     /// Which sources the panel searches. Remembered, so the set you use is the set you get.
+    /// May be empty: turning everything off and then clicking the one you want is a faster way
+    /// to get to a single source than switching seven off one at a time.
     var enabledLanes: Set<SearchLane> {
         didSet { store.set(enabledLanes.map(\.rawValue), forKey: Key.enabledLanes) }
+    }
+
+    /// The order the source buttons sit in, which is also the order their results appear in.
+    ///
+    /// Dragged by the user. The number on a button is its position here, so reordering moves the
+    /// ⌘-numbers with it — which is the point: the number means "where it sits".
+    var laneOrder: [SearchLane] {
+        didSet { store.set(laneOrder.map(\.rawValue), forKey: Key.laneOrder) }
+    }
+
+    /// Move one source to a new position, and report whether anything actually changed.
+    @discardableResult
+    func moveLane(_ lane: SearchLane, before target: SearchLane) -> Bool {
+        guard lane != target, let from = laneOrder.firstIndex(of: lane) else { return false }
+        var updated = laneOrder
+        updated.remove(at: from)
+        guard let to = updated.firstIndex(of: target) else { return false }
+        updated.insert(lane, at: to)
+        guard updated != laneOrder else { return false }
+        laneOrder = updated
+        return true
+    }
+
+    /// Put the buttons back the way they shipped.
+    func resetLaneOrder() {
+        laneOrder = SearchLane.allCases
+    }
+
+    /// How many results each source shows before offering the rest.
+    var resultsPerSource: Int {
+        didSet { store.set(resultsPerSource, forKey: Key.resultsPerSource) }
+    }
+
+    /// Icons, labels, or both — the same three choices Mail's toolbar offers, on the same
+    /// right-click menu.
+    var sourceButtonStyle: SourceButtonStyle {
+        didSet { store.set(sourceButtonStyle.rawValue, forKey: Key.sourceButtonStyle) }
     }
 
     /// Typing an app's name exactly puts that app at the top of the file results.
@@ -159,6 +213,26 @@ final class ScoutSettings {
             try SMAppService.mainApp.unregister()
         }
     }
+}
+
+/// How the source buttons are drawn.
+enum SourceButtonStyle: String, CaseIterable, Identifiable {
+    case iconAndText
+    case iconOnly
+    case textOnly
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .iconAndText: "Icon and Text"
+        case .iconOnly: "Icon Only"
+        case .textOnly: "Text Only"
+        }
+    }
+
+    var showsIcon: Bool { self != .textOnly }
+    var showsText: Bool { self != .iconOnly }
 }
 
 /// Whether macOS is still handing ⌘-Space to Spotlight.
