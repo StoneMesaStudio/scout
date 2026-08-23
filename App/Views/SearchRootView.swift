@@ -120,18 +120,7 @@ struct SearchRootView: View {
             // Wrapped rather than in one row: eight sources plus the scope switch do not fit
             // across the panel at its minimum width, and a row that overflows silently loses
             // whichever sources happen to be last.
-            SourceFlow(spacing: 7) {
-                ForEach(model.orderedLanes) { lane in
-                    SourceButton(
-                        lane: lane,
-                        number: model.number(for: lane),
-                        style: settings.sourceButtonStyle,
-                        isOn: model.enabledLanes.contains(lane),
-                        action: { model.toggleLane(lane) },
-                        onDropOfLane: { model.moveLane($0, before: lane) }
-                    )
-                }
-            }
+            SourceStrip(model: model, style: settings.sourceButtonStyle)
 
             allOrNoneButton
             scopeControl
@@ -523,27 +512,106 @@ private struct SourceFlow: Layout {
     }
 }
 
+/// Where the source buttons are, so a drag knows what it is passing over.
+private struct SourceFramesKey: PreferenceKey {
+    static var defaultValue: [SearchLane: CGRect] { [:] }
+
+    static func reduce(value: inout [SearchLane: CGRect], nextValue: () -> [SearchLane: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
+/// The row of source switches, which is also the row you rearrange.
+///
+/// One gesture does both jobs. `.draggable` on a `Button` does not work here — the button claims
+/// the press and the drag never starts — so there is no button: a press that never travels more
+/// than a few points is a click, and one that does is a drag. Sources shuffle out of the way as
+/// the dragged one passes over them, rather than waiting for a drop.
+private struct SourceStrip: View {
+
+    @Bindable var model: SearchModel
+    let style: SourceButtonStyle
+
+    private static let space = "sourceStrip"
+    /// How far the mouse has to travel before a click becomes a drag.
+    private static let threshold: CGFloat = 5
+
+    @State private var frames: [SearchLane: CGRect] = [:]
+    @State private var dragged: SearchLane?
+    @State private var offset: CGSize = .zero
+
+    var body: some View {
+        SourceFlow(spacing: 7) {
+            ForEach(model.orderedLanes) { lane in
+                SourceButton(
+                    lane: lane,
+                    number: model.number(for: lane),
+                    style: style,
+                    isOn: model.enabledLanes.contains(lane),
+                    isDragging: dragged == lane
+                )
+                .background(
+                    GeometryReader { geometry in
+                        Color.clear.preference(
+                            key: SourceFramesKey.self,
+                            value: [lane: geometry.frame(in: .named(Self.space))]
+                        )
+                    }
+                )
+                .offset(dragged == lane ? offset : .zero)
+                .zIndex(dragged == lane ? 1 : 0)
+                .gesture(gesture(for: lane))
+            }
+        }
+        .coordinateSpace(name: Self.space)
+        .onPreferenceChange(SourceFramesKey.self) { frames = $0 }
+    }
+
+    private func gesture(for lane: SearchLane) -> some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.space))
+            .onChanged { value in
+                if dragged == nil {
+                    let travelled = max(abs(value.translation.width), abs(value.translation.height))
+                    guard travelled > Self.threshold else { return }
+                    dragged = lane
+                }
+                guard dragged == lane, let home = frames[lane] else { return }
+
+                // Measured against where the button sits *now*, so it keeps following the cursor
+                // after the row has rearranged underneath it.
+                offset = CGSize(width: value.location.x - home.midX,
+                                height: value.location.y - home.midY)
+
+                if let over = frames.first(where: { $0.key != lane && $0.value.contains(value.location) })?.key {
+                    withAnimation(.easeOut(duration: 0.16)) { model.moveLane(lane, before: over) }
+                }
+            }
+            .onEnded { _ in
+                // A press that never travelled is a click, and clicking is what these are for.
+                let wasDrag = dragged != nil
+                withAnimation(.easeOut(duration: 0.16)) {
+                    dragged = nil
+                    offset = .zero
+                }
+                if !wasDrag { model.toggleLane(lane) }
+            }
+    }
+}
+
 /// A source switch. Drawn as a real button — raised, bordered, and obviously filled when on —
 /// because a row of bare words does not read as something you can press.
-///
-/// It is also draggable: the order of these buttons is the order the results appear in, and the
-/// number on each one is its position rather than its identity. A click still toggles, because a
-/// drag needs the mouse to actually move first.
 private struct SourceButton: View {
 
     let lane: SearchLane
     let number: Int?
     let style: SourceButtonStyle
     let isOn: Bool
-    let action: () -> Void
-    /// Another source was dropped here — it should end up in this one's place.
-    let onDropOfLane: (SearchLane) -> Void
+    let isDragging: Bool
 
     @State private var hovering = false
-    @State private var targeted = false
 
     var body: some View {
-        Button(action: action) {
+        Group {
             HStack(spacing: 6) {
                 if style.showsIcon {
                     Image(systemName: lane.symbol)
@@ -563,31 +631,20 @@ private struct SourceButton: View {
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(border, lineWidth: targeted ? 2 : 1)
+                    .strokeBorder(isOn ? Color.clear : Color.primary.opacity(hovering ? 0.28 : 0.16))
             }
             .foregroundStyle(isOn ? Color.white : .primary)
-            .shadow(color: .black.opacity(isOn ? 0.18 : 0.06), radius: 1, y: 1)
+            // Lifted off the row while it is being carried, so it is obvious which one is moving.
+            .shadow(color: .black.opacity(isDragging ? 0.35 : (isOn ? 0.18 : 0.06)),
+                    radius: isDragging ? 6 : 1, y: isDragging ? 3 : 1)
+            .scaleEffect(isDragging ? 1.05 : 1)
         }
-        .buttonStyle(.plain)
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .onHover { hovering = $0 }
         .help(helpText)
-        .draggable(lane.rawValue) {
-            // What follows the cursor. Text alone, because the button's own fill reads as
-            // "switched on" and dragging one that is off should not look like turning it on.
-            Label(lane.title, systemImage: lane.symbol)
-                .padding(6)
-        }
-        .dropDestination(for: String.self) { items, _ in
-            // Validated rather than trusted: any dragged text lands here otherwise.
-            guard let dropped = items.first.flatMap(SearchLane.init(rawValue:)) else { return false }
-            onDropOfLane(dropped)
-            return true
-        } isTargeted: { targeted = $0 }
-    }
-
-    private var border: Color {
-        if targeted { return .accentColor }
-        return isOn ? .clear : Color.primary.opacity(hovering ? 0.28 : 0.16)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(Text(lane.title))
     }
 
     private var helpText: String {
