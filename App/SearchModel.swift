@@ -184,9 +184,9 @@ final class SearchModel {
         enabledLanes = on ? Set(SearchLane.allCases) : []
     }
 
-    /// Move a source to sit where another one is. The results follow the buttons.
-    func moveLane(_ lane: SearchLane, before target: SearchLane) {
-        guard settings.moveLane(lane, before: target) else { return }
+    /// Move a source to a position in the row. The results follow the buttons.
+    func moveLane(_ lane: SearchLane, to index: Int) {
+        guard settings.moveLane(lane, to: index) else { return }
         rebuildSections()
     }
 
@@ -292,13 +292,36 @@ final class SearchModel {
         return settings.resultsPerSource
     }
 
-    /// Show more of one source. Files, apps and settings are already in hand so they just
-    /// re-slice; the other three go back to their store for the next page.
+    /// The most rows one source will draw at once.
+    ///
+    /// The results list is a plain stack rather than a lazy one — a lazy one recycled rows into
+    /// the wrong views — so a thousand rows would take seconds to draw. Past this the section
+    /// keeps its "Show more" row, because a cap that hides things silently is the exact failure
+    /// this app exists to fix.
+    static let maximumDrawn = 500
+
+    /// Show the next page of one source.
     func showMore(_ lane: SearchLane) {
+        grow(lane, to: limit(for: lane) + (soloedLane == lane ? soloLimit : pageSize))
+    }
+
+    /// Open one source right out, from its heading.
+    func showAll(_ lane: SearchLane) {
+        grow(lane, to: Self.maximumDrawn)
+    }
+
+    /// How many of a source there are altogether, which is usually more than are shown.
+    func total(for lane: SearchLane) -> Int {
+        sections.first { $0.lane == lane }?.total ?? 0
+    }
+
+    /// Files, apps and settings are already in hand so they just re-slice; the rest go back to
+    /// their store for the next page.
+    private func grow(_ lane: SearchLane, to newLimit: Int) {
         // Selection is an index into a flat list, so growing a section above the cursor would
         // slide the highlight onto somebody else's row. Remember what was selected, not where.
         selectedRowID = selectedRow?.id
-        laneLimits[lane] = limit(for: lane) + (soloedLane == lane ? soloLimit : pageSize)
+        laneLimits[lane] = min(newLimit, Self.maximumDrawn)
         let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
 
         switch lane {

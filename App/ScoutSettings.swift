@@ -126,14 +126,17 @@ final class ScoutSettings {
         didSet { store.set(laneOrder.map(\.rawValue), forKey: Key.laneOrder) }
     }
 
-    /// Move one source to a new position, and report whether anything actually changed.
+    /// Move one source to a position in the row, and report whether anything actually changed.
+    ///
+    /// `index` is a gap between buttons, counted before the move — the same way an insertion
+    /// point is drawn — so pulling something out from the left shifts every later gap down one.
     @discardableResult
-    func moveLane(_ lane: SearchLane, before target: SearchLane) -> Bool {
-        guard lane != target, let from = laneOrder.firstIndex(of: lane) else { return false }
+    func moveLane(_ lane: SearchLane, to index: Int) -> Bool {
+        guard let from = laneOrder.firstIndex(of: lane) else { return false }
         var updated = laneOrder
         updated.remove(at: from)
-        guard let to = updated.firstIndex(of: target) else { return false }
-        updated.insert(lane, at: to)
+        let target = min(max(0, index > from ? index - 1 : index), updated.count)
+        updated.insert(lane, at: target)
         guard updated != laneOrder else { return false }
         laneOrder = updated
         return true

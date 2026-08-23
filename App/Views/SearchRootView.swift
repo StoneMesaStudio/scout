@@ -239,8 +239,9 @@ struct SearchRootView: View {
                 count: count,
                 total: total,
                 isSoloed: model.soloedLane == lane,
+                onExpand: { model.showAll(lane) },
                 onSolo: { model.soloLane(lane) },
-                onShowAll: { model.showAllSources() }
+                onShowEverySource: { model.showAllSources() }
             )
 
         case .status(let lane, let status):
@@ -538,10 +539,17 @@ private struct SourceStrip: View {
 
     @State private var frames: [SearchLane: CGRect] = [:]
     @State private var dragged: SearchLane?
+    /// Where the dragged button started. Held fixed for the whole drag: measuring against its
+    /// live frame made it chase a target that the reorder kept moving, which is the shake.
+    @State private var home: CGRect?
     @State private var offset: CGSize = .zero
+    /// The gap the button will drop into, drawn as a solid line.
+    @State private var insertion: Int?
+
+    private static let spacing: CGFloat = 7
 
     var body: some View {
-        SourceFlow(spacing: 7) {
+        SourceFlow(spacing: Self.spacing) {
             ForEach(model.orderedLanes) { lane in
                 SourceButton(
                     lane: lane,
@@ -565,6 +573,49 @@ private struct SourceStrip: View {
         }
         .coordinateSpace(name: Self.space)
         .onPreferenceChange(SourceFramesKey.self) { frames = $0 }
+        // Nothing reorders until the mouse comes up. What moves during the drag is this line,
+        // which says exactly where the button is going to land.
+        .overlay(alignment: .topLeading) {
+            if let insertion, let bar = insertionBar(at: insertion) {
+                Capsule()
+                    .fill(Color.accentColor)
+                    .frame(width: 3, height: bar.height)
+                    .offset(x: bar.minX, y: bar.minY)
+                    .transition(.opacity)
+            }
+        }
+    }
+
+    /// Which gap between buttons the cursor is closest to, counted left to right along whichever
+    /// row it is over.
+    private func insertionIndex(at point: CGPoint) -> Int? {
+        let lanes = model.orderedLanes
+        let row = lanes.enumerated().filter { _, lane in
+            guard let frame = frames[lane] else { return false }
+            return point.y >= frame.minY && point.y <= frame.maxY
+        }
+        guard !row.isEmpty else { return nil }
+
+        for (index, lane) in row {
+            guard let frame = frames[lane] else { continue }
+            if point.x < frame.midX { return index }
+        }
+        return row.last.map { $0.offset + 1 }
+    }
+
+    /// Where to draw the line for a given gap: down the middle of the space between two buttons,
+    /// or just off the end of the row.
+    private func insertionBar(at index: Int) -> CGRect? {
+        let lanes = model.orderedLanes
+        guard !lanes.isEmpty else { return nil }
+
+        if index < lanes.count, let frame = frames[lanes[index]] {
+            return CGRect(x: frame.minX - Self.spacing / 2 - 1.5, y: frame.minY,
+                          width: 3, height: frame.height)
+        }
+        guard let last = lanes.last, let frame = frames[last] else { return nil }
+        return CGRect(x: frame.maxX + Self.spacing / 2 - 1.5, y: frame.minY,
+                      width: 3, height: frame.height)
     }
 
     private func gesture(for lane: SearchLane) -> some Gesture {
@@ -574,26 +625,29 @@ private struct SourceStrip: View {
                     let travelled = max(abs(value.translation.width), abs(value.translation.height))
                     guard travelled > Self.threshold else { return }
                     dragged = lane
+                    home = frames[lane]
                 }
-                guard dragged == lane, let home = frames[lane] else { return }
+                guard dragged == lane, let home else { return }
 
-                // Measured against where the button sits *now*, so it keeps following the cursor
-                // after the row has rearranged underneath it.
                 offset = CGSize(width: value.location.x - home.midX,
                                 height: value.location.y - home.midY)
-
-                if let over = frames.first(where: { $0.key != lane && $0.value.contains(value.location) })?.key {
-                    withAnimation(.easeOut(duration: 0.16)) { model.moveLane(lane, before: over) }
+                withAnimation(.easeOut(duration: 0.1)) {
+                    insertion = insertionIndex(at: value.location)
                 }
             }
             .onEnded { _ in
                 // A press that never travelled is a click, and clicking is what these are for.
-                let wasDrag = dragged != nil
-                withAnimation(.easeOut(duration: 0.16)) {
-                    dragged = nil
-                    offset = .zero
+                let landing = dragged != nil ? insertion : nil
+                dragged = nil
+                home = nil
+                insertion = nil
+                offset = .zero
+
+                if let landing {
+                    withAnimation(.easeOut(duration: 0.18)) { model.moveLane(lane, to: landing) }
+                } else {
+                    model.toggleLane(lane)
                 }
-                if !wasDrag { model.toggleLane(lane) }
             }
     }
 }
@@ -625,15 +679,18 @@ private struct SourceButton: View {
             .padding(.horizontal, style == .iconOnly ? 9 : 12)
             .padding(.vertical, 6)
             .frame(minHeight: 28)
+            // On is an outline, not a fill. Eight solid blue buttons read as one blue block;
+            // an outline says "switched on" without shouting over the results underneath.
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isOn ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.quaternary))
+                    .fill(isOn ? AnyShapeStyle(Color.accentColor.opacity(0.12)) : AnyShapeStyle(.quaternary))
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(isOn ? Color.clear : Color.primary.opacity(hovering ? 0.28 : 0.16))
+                    .strokeBorder(isOn ? Color.accentColor : Color.primary.opacity(hovering ? 0.28 : 0.16),
+                                  lineWidth: isOn ? 1.5 : 1)
             }
-            .foregroundStyle(isOn ? Color.white : .primary)
+            .foregroundStyle(isOn ? Color.accentColor : .primary)
             // Lifted off the row while it is being carried, so it is obvious which one is moving.
             .shadow(color: .black.opacity(isDragging ? 0.35 : (isOn ? 0.18 : 0.06)),
                     radius: isDragging ? 6 : 1, y: isDragging ? 3 : 1)
@@ -653,55 +710,85 @@ private struct SourceButton: View {
     }
 }
 
+/// The band that starts a section.
+///
+/// Deliberately loud. With eight sources running at once the panel is one long column, and a thin
+/// grey line does not tell the eye where Mail stopped and Notes began — so each source gets its
+/// own colour, its own count, and the two ways out of a long list right there in the band.
 private struct SectionHeader: View {
+
     let lane: SearchLane
     let count: Int
     let total: Int
     /// True when this source is already the only one showing.
     let isSoloed: Bool
+    /// Open this section right out, leaving the others where they are.
+    let onExpand: () -> Void
+    /// Drop the other seven.
     let onSolo: () -> Void
-    let onShowAll: () -> Void
+    /// Put them all back.
+    let onShowEverySource: () -> Void
+
+    private var hasMore: Bool { total > count }
 
     var body: some View {
-        HStack(spacing: 7) {
-            Image(systemName: lane.symbol)
-                .font(.system(size: 10, weight: .semibold))
-            Text(lane.title.uppercased())
-                .font(.system(size: 10.5, weight: .semibold))
-                .tracking(0.8)
-            if count > 0 {
-                // "12 of 2,367" rather than a bare 12 — the difference between "that's all
-                // there is" and "there is plenty more".
-                Text(total > count ? "\(count) of \(total.formatted())" : "\(count)")
-                    .font(.system(size: 10, design: .monospaced))
-                    .opacity(0.7)
-            }
-            Rectangle()
-                .fill(.quaternary)
-                .frame(height: 1)
+        HStack(spacing: 9) {
+            // A solid bar down the leading edge, so the start of a section is findable at a
+            // glance from anywhere in the column.
+            RoundedRectangle(cornerRadius: 2)
+                .fill(lane.tint)
+                .frame(width: 4)
 
-            // The way out of a long list: take the source you meant and drop the other seven.
+            Image(systemName: lane.symbol)
+                .font(.system(size: 12, weight: .semibold))
+
+            Text(lane.title.uppercased())
+                .font(.system(size: 12, weight: .bold))
+                .tracking(0.6)
+
+            // "10 of 94" rather than a bare 10 — the difference between "that is all there is"
+            // and "there is plenty more".
+            Text(hasMore ? "\(count) of \(total.formatted())" : "\(count)")
+                .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 1.5)
+                .background(lane.tint.opacity(0.22), in: Capsule())
+
+            Spacer(minLength: 8)
+
             if isSoloed {
-                link("Show all sources", action: onShowAll)
-            } else if count > 0 {
-                link("Show only \(lane.title)", action: onSolo)
+                action("Show all sources", symbol: "arrow.uturn.backward", perform: onShowEverySource)
+            } else {
+                if hasMore {
+                    action(total > SearchModel.maximumDrawn ? "Show \(SearchModel.maximumDrawn)" : "Show all",
+                           symbol: "arrow.down.to.line",
+                           perform: onExpand)
+                }
+                if count > 0 {
+                    action("Show only \(lane.title)", symbol: "line.3.horizontal.decrease", perform: onSolo)
+                }
             }
         }
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 4)
-        .padding(.top, 8)
-        .padding(.bottom, 4)
-        .background(.regularMaterial)
+        .foregroundStyle(lane.tint)
+        .padding(.leading, 6)
+        .padding(.trailing, 8)
+        .padding(.vertical, 7)
+        .background(lane.tint.opacity(0.13), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.top, 10)
+        .padding(.bottom, 3)
     }
 
-    private func link(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 10.5, weight: .medium))
-                .underline()
+    private func action(_ title: String, symbol: String, perform: @escaping () -> Void) -> some View {
+        Button(action: perform) {
+            HStack(spacing: 4) {
+                Image(systemName: symbol).font(.system(size: 9, weight: .bold))
+                Text(title).font(.system(size: 11.5, weight: .semibold))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(lane.tint.opacity(0.18), in: Capsule())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
     }
 }
 
