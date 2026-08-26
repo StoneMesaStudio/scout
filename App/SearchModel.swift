@@ -449,7 +449,7 @@ final class SearchModel {
     private var demoQuery: String?
     /// Which way the source buttons are drawn in a photograph. The shipping default unless a
     /// picture is being taken to compare the three.
-    var demoButtonStyle: SourceButtonStyle = .iconOnly
+    var demoButtonStyle: SourceButtonStyle = .textOnly
     private var demoLanes: Set<SearchLane> = Set(SearchLane.allCases)
 
     /// Arrange the panel for one of the pictures on the website.

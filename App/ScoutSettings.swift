@@ -46,10 +46,13 @@ final class ScoutSettings {
         enabledLanes = lanes
         laneOrder = SearchLane.ordered(from: store.stringArray(forKey: Key.laneOrder) ?? [])
         resultsPerSource = store.object(forKey: Key.resultsPerSource) as? Int ?? Self.defaultResultsPerSource
-        // Icons alone by default: the discs wear their app's real icon, which names them better
-        // than a word would, and the name is a tooltip away.
+        // Words by default. The discs wear each app's real icon, which is a stronger label than
+        // most icon rows manage — but two of the eight are not the app whose contents the source
+        // searches, "click the yellow one" is not a sentence anybody should have to say down a
+        // phone, and the number under a button is its position rather than its name, so the
+        // shortcut cannot stand in either. The icons are one setting away for whoever wants them.
         sourceButtonStyle = SourceButtonStyle(rawValue: store.string(forKey: Key.sourceButtonStyle) ?? "")
-            ?? .iconOnly
+            ?? .textOnly
         hasSeenWelcome = store.bool(forKey: Key.hasSeenWelcome)
         hideCommandSpaceHint = store.bool(forKey: Key.hideCommandSpaceHint)
         searchMailBodies = store.object(forKey: Key.searchMailBodies) as? Bool ?? true

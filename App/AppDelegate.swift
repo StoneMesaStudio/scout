@@ -76,7 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // ways when the question is which of them should be the default.
             let style = CommandLine.arguments.firstIndex(of: "--style")
                 .flatMap { CommandLine.arguments.count > $0 + 1 ? CommandLine.arguments[$0 + 1] : nil }
-                .flatMap(SourceButtonStyle.init(rawValue:)) ?? .iconOnly
+                .flatMap(SourceButtonStyle.init(rawValue:)) ?? .textOnly
 
             guard let scene = DemoData.Scene(rawValue: name) else {
                 let known = DemoData.Scene.allCases.map(\.rawValue).joined(separator: ", ")
