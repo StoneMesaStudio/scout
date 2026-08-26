@@ -22,3 +22,7 @@ Package.resolved
 # Release artefacts — bin/release.sh writes the notarised DMG here. The shipped copy lives
 # in the website repo, not this one.
 dist/
+
+# Private working notes — not for the public repo.
+CLAUDE.md
+DESIGN-REVIEW.md
