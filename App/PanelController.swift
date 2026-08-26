@@ -51,11 +51,12 @@ final class PanelController {
     ///
     /// Used by `Scout --shot`, so the pictures on the website are made without anyone's real mail
     /// or files on screen — and without the app reading a single store to draw them.
-    func beginShot(scene: DemoData.Scene, query: String?, size: NSSize) {
+    func beginShot(scene: DemoData.Scene, query: String?, style: SourceButtonStyle, size: NSSize) {
         let panel = existingOrNewPanel()
         panel.setFrame(NSRect(origin: CGPoint(x: -6000, y: 0), size: size), display: false)
         panel.orderFront(nil)
         model.reset()
+        model.demoButtonStyle = style
         model.showDemoScene(scene, query: query)
         panel.layoutIfNeeded()
     }

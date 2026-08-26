@@ -447,6 +447,9 @@ final class SearchModel {
     /// A word typed on the command line instead of the scene's own, for trying one out without
     /// a rebuild.
     private var demoQuery: String?
+    /// Which way the source buttons are drawn in a photograph. The shipping default unless a
+    /// picture is being taken to compare the three.
+    var demoButtonStyle: SourceButtonStyle = .iconOnly
     private var demoLanes: Set<SearchLane> = Set(SearchLane.allCases)
 
     /// Arrange the panel for one of the pictures on the website.

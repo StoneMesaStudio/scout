@@ -142,6 +142,17 @@ private struct GeneralSettings: View {
             // The GPL asks a program with an interface to say, somewhere the user can find it,
             // that it is free software and where the source is. Scout has no About window, so it
             // says it here.
+            Section("Remove Scout") {
+                HStack {
+                    Text(removalSummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 12)
+                    Button("Remove Scout…") { Uninstaller.run() }
+                }
+            }
+
             Section {
                 HStack(spacing: 6) {
                     Text(Self.version)
@@ -156,6 +167,18 @@ private struct GeneralSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// Says what leaving actually costs, before anybody clicks — the indexes are the surprise.
+    private var removalSummary: String {
+        let found = Uninstaller.leftovers()
+        guard !found.isEmpty else {
+            return "Moves Scout to the Trash. It has written nothing outside its own bundle yet."
+        }
+        let total = found.reduce(0) { $0 + $1.bytes }
+        return "Moves Scout to the Trash and deletes the \(Uninstall.readable(total)) it has "
+             + "written outside its own bundle. The permissions you granted are yours to remove "
+             + "in System Settings — no app can take those back."
     }
 
     private static var version: String {

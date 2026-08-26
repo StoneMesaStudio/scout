@@ -69,7 +69,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let width = CommandLine.arguments.count > index + 3 ? Double(CommandLine.arguments[index + 3]) ?? 900 : 900
             let height = CommandLine.arguments.count > index + 4 ? Double(CommandLine.arguments[index + 4]) ?? 720 : 720
             let canvas = NSSize(width: width, height: height)
-            let query = CommandLine.arguments.count > index + 5 ? CommandLine.arguments[index + 5] : nil
+            // A trailing word, but not the next flag — `--style` sits in the same position.
+            let trailing = CommandLine.arguments.count > index + 5 ? CommandLine.arguments[index + 5] : nil
+            let query = (trailing?.hasPrefix("--") ?? true) ? nil : trailing
+            // `--style iconOnly|iconAndText|textOnly`, for photographing the same panel three
+            // ways when the question is which of them should be the default.
+            let style = CommandLine.arguments.firstIndex(of: "--style")
+                .flatMap { CommandLine.arguments.count > $0 + 1 ? CommandLine.arguments[$0 + 1] : nil }
+                .flatMap(SourceButtonStyle.init(rawValue:)) ?? .iconOnly
 
             guard let scene = DemoData.Scene(rawValue: name) else {
                 let known = DemoData.Scene.allCases.map(\.rawValue).joined(separator: ", ")
@@ -79,13 +86,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
 
-            panel.beginShot(scene: scene, query: query, size: canvas)
+            panel.beginShot(scene: scene, query: query, style: style, size: canvas)
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                 let report = self.panel.captureShot(to: destination)
                 try? report.write(to: destination.appendingPathExtension("txt"),
                                   atomically: true, encoding: .utf8)
                 NSApp.terminate(nil)
             }
+            return
+        }
+
+        // `Scout --uninstall-preview <path>` writes what the uninstaller would say and do, and
+        // removes nothing. The wording is the last thing somebody reads before an action with no
+        // undo; it should be reviewable without arming the button to read it.
+        if let index = CommandLine.arguments.firstIndex(of: "--uninstall-preview"),
+           CommandLine.arguments.count > index + 1 {
+            let report = Uninstaller.preview()
+            try? report.write(to: URL(filePath: CommandLine.arguments[index + 1]),
+                              atomically: true, encoding: .utf8)
+            NSApp.terminate(nil)
             return
         }
 
@@ -174,6 +193,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Diagnose Sources…", action: #selector(runDiagnostic), keyEquivalent: "")
             .target = self
         menu.addItem(.separator())
+        menu.addItem(withTitle: "Remove Scout\u{2026}", action: #selector(uninstall), keyEquivalent: "")
+            .target = self
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Scout", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         return menu
     }
@@ -254,5 +276,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showSettings() {
         settingsWindow.show()
+    }
+
+    /// The item Engst asks for by name. Scout has no Help menu — no menu bar at all — so the
+    /// status-item menu is where it goes, next to Quit, which is where somebody leaving will look.
+    @objc private func uninstall() {
+        Uninstaller.run()
     }
 }

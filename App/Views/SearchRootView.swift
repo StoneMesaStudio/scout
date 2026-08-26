@@ -125,7 +125,7 @@ struct SearchRootView: View {
             // whichever sources happen to be last.
             // The screenshots show the shipping default, not whatever the Mac taking them
             // happens to be set to.
-            SourceStrip(model: model, style: model.isDemo ? .iconOnly : settings.sourceButtonStyle)
+            SourceStrip(model: model, style: model.isDemo ? model.demoButtonStyle : settings.sourceButtonStyle)
 
             Spacer(minLength: 8)
             scopeControl
