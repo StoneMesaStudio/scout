@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Stone Mesa Studio, LLC
+
 import Foundation
 
 /// One note found in Apple Notes.

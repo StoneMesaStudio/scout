@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Stone Mesa Studio, LLC
+
 import AppKit
 import SwiftUI
 import ScoutCore
@@ -135,9 +138,33 @@ private struct GeneralSettings: View {
                     Text(loginError).font(.caption).foregroundStyle(.orange)
                 }
             }
+
+            // The GPL asks a program with an interface to say, somewhere the user can find it,
+            // that it is free software and where the source is. Scout has no About window, so it
+            // says it here.
+            Section {
+                HStack(spacing: 6) {
+                    Text(Self.version)
+                    Text("·")
+                    Text("Free software under the GPL, version 3")
+                    Spacer()
+                    Link("Source", destination: Self.source)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            }
         }
         .formStyle(.grouped)
     }
+
+    private static var version: String {
+        let bundle = Bundle.main
+        let short = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+        return "Scout \(short)"
+    }
+
+    private static let source = URL(string: "https://github.com/StoneMesaStudio/scout")!
 }
 
 /// How far along the mail index is, and a way to start it over.

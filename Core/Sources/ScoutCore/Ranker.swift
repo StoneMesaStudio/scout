@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Stone Mesa Studio, LLC
+
 import Foundation
 
 /// How well the query matched an item's name. Ordered worst to best so the raw value can

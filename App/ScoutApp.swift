@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Stone Mesa Studio, LLC
+
 import SwiftUI
 
 /// Scout has no windows of its own at launch — it lives in the menu bar and shows a panel when

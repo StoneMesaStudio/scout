@@ -100,3 +100,21 @@ on first run and listed again under Settings › Permissions:
 Sandboxing is mandatory there, and a sandboxed app can only see files handed to it one at a time
 through an open panel. Full Disk Access — which the Mail, Messages and Notes lanes need — cannot
 be granted to a sandboxed app at all. Scout ships as a signed, notarized direct download instead.
+
+## Licence
+
+Scout is free software, under the **GNU General Public License, version 3 or later** —
+see [LICENSE](LICENSE). You may use it, read it, change it and pass it on; anything you
+pass on has to carry the same freedoms and the same source.
+
+Two things the licence does not hand over:
+
+- **The name and the icon.** "Scout" and the app's mark belong to Stone Mesa Studio, LLC.
+  Fork the code freely; ship it under your own name.
+- **A signing identity.** `bin/release.sh` notarizes with this project's Apple Developer
+  ID (`TEAM_ID`, and credentials from `~/.appstoreconnect/`). A fork needs its own — a
+  Developer ID Application certificate, which is not the same certificate the App Store
+  uses.
+
+Scout depends on nothing but Apple's own frameworks. There is no third-party code in the
+repository to reconcile with the GPL.
