@@ -13,6 +13,8 @@ struct PanelRowView: View {
     let row: PanelRow
     let selected: Bool
 
+    @Environment(\.colorScheme) private var scheme
+
     /// A message, a subject line or a note title is truncated at the end like a sentence, not in
     /// the middle like a filename.
     private var isProse: Bool {
@@ -60,8 +62,30 @@ struct PanelRowView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(selected ? Color.accentColor.opacity(0.16) : .clear,
-                    in: RoundedRectangle(cornerRadius: 8))
+        .background { if selected { selectionCard } }
+    }
+
+    /// The selected row is a card lifted off the page, not a wash of colour over it.
+    ///
+    /// A tint was tried and abandoned: every heading is already a tinted band, so a tinted row is
+    /// the same thing in a slightly different shade, and the row that matters ends up quieter than
+    /// the label above it. Depth is the one thing a heading never has, so it cannot be mistaken for
+    /// one no matter which of the eight colours it is sitting under.
+    private var selectionCard: some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(cardFill)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.14), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(scheme == .dark ? 0.34 : 0.18), radius: 5, y: 2)
+    }
+
+    /// Light: paper, which is brighter than the panel's grey. Dark: light laid *on* the panel,
+    /// because `textBackgroundColor` in the dark is darker than the material behind it and a card
+    /// darker than its page reads as a hole rather than a raised thing.
+    private var cardFill: some ShapeStyle {
+        scheme == .dark ? AnyShapeStyle(Color.white.opacity(0.16)) : AnyShapeStyle(Color(nsColor: .textBackgroundColor))
     }
 
     @ViewBuilder
