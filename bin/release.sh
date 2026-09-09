@@ -122,22 +122,43 @@ ok "built"
 step "Re-sign Sparkle's helpers"
 SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
 if [ "$DRY" = 0 ] && [ -d "$SPARKLE" ]; then
+  KEEP="$(mktemp -d)"
   for nested in \
     "$SPARKLE/Versions/B/XPCServices/Installer.xpc" \
     "$SPARKLE/Versions/B/XPCServices/Downloader.xpc" \
     "$SPARKLE/Versions/B/Updater.app" \
     "$SPARKLE/Versions/B/Autoupdate" \
-    "$SPARKLE" \
-    "$APP"
+    "$SPARKLE"
   do
     [ -e "$nested" ] || continue
-    codesign --force --timestamp --options runtime --sign "$IDENTITY" "$nested" >/dev/null 2>&1 \
-      || die "Could not re-sign $(basename "$nested")."
+
+    # Every one of these carries its own entitlements. `codesign --force` without them signs them
+    # away, and an updater missing an entitlement fails at the moment somebody tries to update —
+    # long after any build would have caught it. So they are read off and handed straight back.
+    SAVED="$KEEP/$(basename "$nested").plist"
+    codesign -d --entitlements - --xml "$nested" >"$SAVED" 2>/dev/null || true
+
+    if [ -s "$SAVED" ]; then
+      codesign --force --timestamp --options runtime --entitlements "$SAVED" \
+        --sign "$IDENTITY" "$nested" >/dev/null 2>&1 || die "Could not re-sign $(basename "$nested")."
+    else
+      codesign --force --timestamp --options runtime \
+        --sign "$IDENTITY" "$nested" >/dev/null 2>&1 || die "Could not re-sign $(basename "$nested")."
+    fi
     printf '  signed %s\n' "${nested#$APP/Contents/Frameworks/}"
   done
-  ok "Sparkle's helpers carry the Developer ID"
+  rm -rf "$KEEP"
+
+  # The app itself last, and with its own entitlements: re-signing anything inside it broke the
+  # seal above, and a bare --force here is what silently strips the app's entitlements.
+  codesign --force --timestamp --options runtime \
+    --entitlements "$ROOT/App/Support/Scout.entitlements" \
+    --sign "$IDENTITY" "$APP" >/dev/null 2>&1 || die "Could not re-sign the app."
+  printf '  signed %s\n' "$APP_NAME.app"
+
+  ok "Sparkle's helpers carry the Developer ID, and their entitlements survived"
 elif [ "$DRY" = 1 ]; then
-  echo "  would re-sign Sparkle's nested helpers, deepest first"
+  echo "  would re-sign Sparkle's nested helpers, deepest first, preserving their entitlements"
 fi
 
 # ---- 5. Check the signature before Apple does -----------------------------
