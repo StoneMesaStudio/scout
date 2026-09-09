@@ -44,8 +44,17 @@ the public half is `SUPublicEDKey` in the app's Info.plist, and every copy of Sc
 there checks against it.
 
 **It cannot be replaced without abandoning everyone already running Scout.** A new key means every
-existing copy refuses every future update, and each person has to notice and download the app
-again by hand. Export a copy and keep it somewhere safe:
+existing copy refuses every future update, and each person has to notice and download the app again
+by hand. The login keychain is not synced to iCloud, so it goes with the Mac.
 
-    ./bin/generate_keys -x scout-sparkle-key.txt      # writes the private key to a file
-    ./bin/generate_keys -f scout-sparkle-key.txt      # puts it back, on a new Mac
+The tool lives in the resolved package, which is derived data and can be deleted at any time — it
+comes back with `xcodebuild -resolvePackageDependencies`:
+
+    KEYS=build/release-derived/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys
+    $KEYS -p                          # print the public key, to check it against Info.plist
+    $KEYS -x scout-sparkle-key.txt    # export the private key to a file
+    $KEYS -f scout-sparkle-key.txt    # import it, on a new Mac
+
+The exported file is the key in plain text. It is the same string as the password on the
+**"Private key for signing Sparkle updates"** item in Keychain Access, so a copy can also be taken
+from there without any tooling at all.
