@@ -30,6 +30,11 @@ public final class SpotlightSearcher {
     private var pendingDelivery: Task<Void, Never>?
     private var lastDelivery: ContinuousClock.Instant?
 
+    /// The search waiting for its folders to be opened, and the warm-up it is waiting on.
+    private var startTask: Task<Void, Never>?
+    private var warmTask: Task<Void, Never>?
+    private var warmingDirectories: [URL] = []
+
     public init(home: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.home = home
         query.notificationBatchingInterval = 0.12
@@ -61,6 +66,8 @@ public final class SpotlightSearcher {
 
     public func stop() {
         cancelPendingDelivery()
+        startTask?.cancel()
+        startTask = nil
         query.stop()
     }
 
@@ -102,6 +109,7 @@ public final class SpotlightSearcher {
     public func search(_ text: String, directories: [URL]) {
         // Anything queued belongs to the word that was typed before this one.
         cancelPendingDelivery()
+        startTask?.cancel()
         query.stop()
 
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -110,7 +118,47 @@ public final class SpotlightSearcher {
             return
         }
 
-        query.predicate = Self.predicate(for: trimmed)
+        let warm = warmUp(directories)
+        startTask = Task { [weak self] in
+            await warm.value
+            guard !Task.isCancelled, let self else { return }
+            self.startTask = nil
+            self.begin(trimmed, directories: directories)
+        }
+    }
+
+    /// Open every folder that is about to be searched, on a thread where waiting costs nothing.
+    ///
+    /// `NSMetadataQuery.start()` resolves and opens each search scope before it returns. A folder
+    /// the iCloud file provider has let go cold can take the better part of a minute to open —
+    /// measured at 54,951 ms on one Mac, and 0.0 ms on each of the next five tries. Paying that
+    /// inside `start()` means paying it on the thread that draws the window, once per keystroke,
+    /// which is exactly what the beachball was.
+    ///
+    /// Paid here instead, the panel stays alive and only the file results are late. It is not a
+    /// cache: a folder that has gone cold again has to be opened again, and the point is only ever
+    /// *where* that happens. When the folders are warm this costs a hop between threads.
+    private func warmUp(_ directories: [URL]) -> Task<Void, Never> {
+        // A warm-up already running for the same folders is the one to wait on. A second would
+        // only queue behind it inside the same daemon.
+        if let running = warmTask, warmingDirectories == directories { return running }
+
+        warmingDirectories = directories
+        let task = Task { [weak self] in
+            await Task.detached(priority: .userInitiated) {
+                for url in directories {
+                    let descriptor = Darwin.open(url.path, O_RDONLY | O_DIRECTORY)
+                    if descriptor >= 0 { Darwin.close(descriptor) }
+                }
+            }.value
+            self?.warmTask = nil
+        }
+        warmTask = task
+        return task
+    }
+
+    private func begin(_ text: String, directories: [URL]) {
+        query.predicate = Self.predicate(for: text)
         query.searchScopes = directories.isEmpty ? [NSMetadataQueryLocalComputerScope] : directories
         query.start()
     }

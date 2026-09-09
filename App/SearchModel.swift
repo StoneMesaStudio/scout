@@ -436,10 +436,14 @@ final class SearchModel {
     // MARK: - Searching
 
     /// A short delay so a fast typist runs one search, not eight.
+    ///
+    /// It was 90 ms, which is barely a delay at all: typing "calendar" set off eight searches, and
+    /// starting a search opens every folder being searched. 250 ms is still under the gap between
+    /// two keys for most people and cuts that to two or three.
     private func scheduleSearch() {
         debounce?.cancel()
         debounce = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(90))
+            try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
             self?.runSearch()
         }

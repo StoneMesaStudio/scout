@@ -3,7 +3,7 @@
 Working notes, not a document for John. Written 2026-09-09 while chasing a beachball he could not
 reproduce. Ranked by what actually costs him time.
 
-## 1. Starting the query opens the scope folders — and one of them is iCloud's · NOT FIXED
+## 1. Starting the query opens the scope folders — and one of them is iCloud's · FIXED 2026-09-09
 
 `SpotlightSearcher.search(_:directories:)` calls `query.start()` on the main thread. A sample of the
 running app caught it parked there for a full 3-second sample:
@@ -19,13 +19,22 @@ provider daemon and blocks for as long as that daemon wants.
 This is the beachball John reported. It fires **once per keystroke**, because `runSearch()` restarts
 the query and the 90 ms debounce barely coalesces anything.
 
-Fix, in order:
-- Raise the debounce from 90 ms to ~250 ms. Fewer restarts, no behaviour anyone can see.
-- Warm the scope directories on a background task whenever the scope changes, and hold the search
-  until the warm-up for that scope has finished. That moves the blocking `open()` off the thread
-  that draws the window: a cold search comes back late instead of freezing the Mac.
-- Do not try to move `query.start()` itself off the main thread. It wants a run loop and the
-  delivery thread follows the starting thread; that is a much larger change for the same result.
+Fixed by:
+- Raising the debounce from 90 ms to 250 ms, so typing a word starts two or three searches rather
+  than eight.
+- Opening every scope directory on a detached task and holding the query until that returns
+  (`SpotlightSearcher.warmUp`). The blocking `open()` now happens off the thread that draws the
+  window, so a cold search comes back late instead of freezing the Mac. It is deliberately not a
+  cache — a folder that has gone cold again is opened again — because the point is only ever
+  *where* the waiting happens.
+
+`query.start()` itself was left on the main thread on purpose: it wants a run loop and its delivery
+thread follows the starting thread, which is a much larger change for the same result.
+
+**Not verified before-and-after.** The 55-second open has not been reproducible since; the folder
+went warm and stayed warm. Verified by construction, by the suite, and by a self-test confirming
+file results still arrive through the now-asynchronous start. Making it cold on demand would mean
+evicting John's Documents folder, which is not worth doing to prove a point.
 
 ## 2. Re-ranking every match on every progress report · FIXED 2026-09-09 (5d77fce…)
 
