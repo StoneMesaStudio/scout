@@ -61,6 +61,20 @@ final class PermissionCenter {
     private let home = FileManager.default.homeDirectoryForCurrentUser
     private static let grantedKey = "permissionGrantDates"
 
+    /// The last answer about Documents, Desktop and Downloads, and whether it has been asked for
+    /// at all yet.
+    ///
+    /// These three are not like the others. There is no API that reports whether they are allowed
+    /// — the only way to find out is to read one, and reading one that has not been answered yet
+    /// *is* the request: macOS puts up the prompt. So this page used to manufacture a prompt every
+    /// two seconds, for each folder still outstanding, for as long as it was open. The screen whose
+    /// whole job is to show you your permissions was the thing pestering you for them.
+    ///
+    /// So the answer is remembered, and asked for again only when the user does something that
+    /// means they want it asked.
+    private var missingFolders: [String] = PermissionCenter.protectedFolders
+    private var hasCheckedFolders = false
+
     init(store: UserDefaults = .standard) {
         self.store = store
         refresh()
@@ -76,9 +90,12 @@ final class PermissionCenter {
     private var fullDiskAccess: Permission {
         // Mail, Messages and Notes are the three stores behind this switch, and the only honest
         // test is to try reading one of them.
-        let readable = StoreAccess.canRead(directory: home.appending(path: "Library/Mail"))
-            || StoreAccess.canRead(file: home.appending(path: "Library/Messages/chat.db"))
+        // Cheapest first, because this runs on a timer: two single-file opens before the one
+        // that enumerates a mail archive. None of the three can prompt — macOS never asks for Full
+        // Disk Access, it just refuses until the switch is on.
+        let readable = StoreAccess.canRead(file: home.appending(path: "Library/Messages/chat.db"))
             || StoreAccess.canRead(file: NotesIndex.defaultSource(home: home))
+            || StoreAccess.canRead(directory: home.appending(path: "Library/Mail"))
 
         return Permission(
             id: "fullDisk",
@@ -132,21 +149,36 @@ final class PermissionCenter {
 
     /// Documents, Desktop and Downloads are each their own permission, prompted the first time
     /// something reads them.
+    /// Built from the remembered answer. Never reads the folders — see `missingFolders`.
     private var fileFolders: Permission {
-        let missing = Self.protectedFolders.filter {
-            !StoreAccess.canRead(directory: home.appending(path: $0))
+        let purpose: String = if !hasCheckedFolders {
+            "Scout will ask the first time it searches them."
+        } else if missingFolders.isEmpty {
+            "Scout can search all three."
+        } else {
+            "Still waiting on: \(missingFolders.joined(separator: ", "))."
         }
 
         return Permission(
             id: "files",
             title: "Documents, Desktop & Downloads",
-            purpose: missing.isEmpty
-                ? "Scout can search all three."
-                : "Still waiting on: \(missing.joined(separator: ", ")).",
+            purpose: purpose,
             symbol: "folder",
-            state: missing.isEmpty ? .granted : .notAsked,
+            state: hasCheckedFolders && missingFolders.isEmpty ? .granted : .notAsked,
             action: .ask
         )
+    }
+
+    /// Read the three folders, which is both the check and the request.
+    ///
+    /// Only ever called from something the user did — opening this page, pressing Check again, or
+    /// pressing Allow. Never from the timer.
+    func checkFolders() {
+        missingFolders = Self.protectedFolders.filter {
+            !StoreAccess.canRead(directory: home.appending(path: $0))
+        }
+        hasCheckedFolders = true
+        refresh()
     }
 
     private var spotlightShortcut: Permission {
@@ -181,11 +213,8 @@ final class PermissionCenter {
 
         case .ask where permission.id == "files":
             // There is no API to request these; reading the folder is what makes macOS ask.
-            for folder in Self.protectedFolders {
-                _ = try? FileManager.default.contentsOfDirectory(
-                    atPath: home.appending(path: folder).path
-                )
-            }
+            checkFolders()
+            return
 
         case .ask:
             break

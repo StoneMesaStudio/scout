@@ -62,10 +62,14 @@ if it ever shows up in a real report.
 
 ## 4–8. Found by audit, not yet measured against real use · NOT FIXED
 
-- **Permissions heartbeat.** Every 2 s while the Settings ▸ Permissions tab is open, on the main
-  actor: `contentsOfDirectory` on `~/Library/Mail`, byte reads of `chat.db` and `NoteStore.sqlite`,
-  `contentsOfDirectory` on Documents/Desktop/Downloads. The Documents one is the same iCloud folder
-  as §1. `SettingsView.swift:401`, `Permissions.swift:71`.
+- **Permissions heartbeat.** FIXED 2026-09-09, and it was worse than a hang. Every 2 s the tab read
+  Documents, Desktop and Downloads to find out whether it was allowed to — and for a folder nobody
+  has answered for yet, that read *is* the request, so macOS put up a prompt every two seconds for
+  as long as the page was open. The page whose job is to show you your permissions was the thing
+  demanding them. The answer is now remembered and re-asked only on an explicit user action
+  (opening the page, Check again, Allow); the timer runs only the checks that cannot prompt. The
+  Full Disk Access test also reorders to put the two single-file opens ahead of the mail-archive
+  enumeration.
 - **`Diagnostics.report()` runs on the main thread.** A bare `Task {}` inside a `@MainActor` class
   inherits main-actor isolation, so "Diagnose Sources…" enumerates all of `~/Library/Mail`, reads 40
   `.emlx` files and reads Contacts without ever leaving the main thread. `AppDelegate.swift:224`.

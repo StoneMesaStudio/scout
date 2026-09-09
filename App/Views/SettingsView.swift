@@ -397,7 +397,8 @@ private struct PermissionSettings: View {
     @State private var window: NSWindow?
 
     /// macOS gives no notification when a permission changes, so the only way to keep up with a
-    /// trip to System Settings is to look again periodically.
+    /// trip to System Settings is to look again periodically. `refresh()` is deliberately the
+    /// cheap half — it reads nothing that can prompt.
     private let heartbeat = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -421,7 +422,10 @@ private struct PermissionSettings: View {
 
                 HStack {
                     Spacer()
-                    Button("Check again") { center.refresh() }
+                    Button("Check again") {
+                        center.refresh()
+                        center.checkFolders()
+                    }
                         .buttonStyle(.link)
                         .font(.system(size: 12))
                 }
@@ -431,6 +435,9 @@ private struct PermissionSettings: View {
         }
         .onAppear {
             center.refresh()
+            // Once, because opening this page is someone asking. The timer below must never do
+            // it: reading those folders is what makes macOS put up the prompt.
+            center.checkFolders()
             guard !hasAutoRequested, let requestOnAppear,
                   let permission = center.permissions.first(where: { $0.id == requestOnAppear })
             else { return }
