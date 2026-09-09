@@ -2,27 +2,25 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Menu-bar app: no Dock icon, no app-switcher entry, no window at launch. -->
 	<key>LSUIElement</key>
 	<true/>
-
-	<!-- macOS shows these sentences in the permission prompts the first time a search reaches
-	     one of these folders. Without them the prompt is a bare "Scout would like to access…",
-	     which reads like something to deny. -->
-	<key>NSDocumentsFolderUsageDescription</key>
-	<string>Scout searches your Documents folder so it can find your files.</string>
-	<key>NSDesktopFolderUsageDescription</key>
-	<string>Scout searches your Desktop so it can find your files.</string>
-	<key>NSDownloadsFolderUsageDescription</key>
-	<string>Scout searches your Downloads folder so it can find your files.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>Scout searches your contacts so you can find a person by name, number or address.</string>
-
-	<!-- Reminders. The full-access key is the one macOS 14 and later reads; the older key is
-	     kept because a prompt with no sentence in it reads like something to deny. -->
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Scout searches your Desktop so it can find your files.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Scout searches your Documents folder so it can find your files.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Scout searches your Downloads folder so it can find your files.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Scout searches your reminders so you can find one by what it says, what list it is in, or the note on it.</string>
 	<key>NSRemindersUsageDescription</key>
 	<string>Scout searches your reminders so you can find one by what it says, what list it is in, or the note on it.</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://apps.stonemesastudio.com/downloads/scout-appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>zm6+hKA8RIBqSylHEjm9QZq26hpoJeMQVsGEYQJ39dw=</string>
 </dict>
 </plist>

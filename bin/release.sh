@@ -110,6 +110,36 @@ run xcodebuild \
 [ "$DRY" = 1 ] || [ -d "$APP" ] || die "The build reported success but produced no app at $APP"
 ok "built"
 
+# ---- 4b. Re-sign what Sparkle brought with it -----------------------------
+# `xcodebuild build` signs the app and the frameworks it links, and leaves the helpers *inside*
+# Sparkle.framework ad-hoc signed — the updater, the auto-updater and the two XPC services. Apple's
+# notary service refuses ad-hoc signed code inside a Developer ID app, and `codesign --verify
+# --deep --strict` says nothing about it, so the first sign of trouble would be a notary rejection
+# twenty minutes later.
+#
+# Signed inside out, deepest first: signing a container seals whatever is inside it, so anything
+# re-signed afterwards breaks the seal above it.
+step "Re-sign Sparkle's helpers"
+SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
+if [ "$DRY" = 0 ] && [ -d "$SPARKLE" ]; then
+  for nested in \
+    "$SPARKLE/Versions/B/XPCServices/Installer.xpc" \
+    "$SPARKLE/Versions/B/XPCServices/Downloader.xpc" \
+    "$SPARKLE/Versions/B/Updater.app" \
+    "$SPARKLE/Versions/B/Autoupdate" \
+    "$SPARKLE" \
+    "$APP"
+  do
+    [ -e "$nested" ] || continue
+    codesign --force --timestamp --options runtime --sign "$IDENTITY" "$nested" >/dev/null 2>&1 \
+      || die "Could not re-sign $(basename "$nested")."
+    printf '  signed %s\n' "${nested#$APP/Contents/Frameworks/}"
+  done
+  ok "Sparkle's helpers carry the Developer ID"
+elif [ "$DRY" = 1 ]; then
+  echo "  would re-sign Sparkle's nested helpers, deepest first"
+fi
+
 # ---- 5. Check the signature before Apple does -----------------------------
 # Cheaper to fail here than to wait out a notary round trip and be told the same thing.
 step "Verify the signature"
@@ -138,6 +168,19 @@ if [ "$DRY" = 0 ]; then
       die "The build carries com.apple.security.get-task-allow — the debug entitlement.
   Notarisation refuses it. CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO is what keeps it out." ;;
   esac
+
+  # Nothing inside may be ad-hoc signed. `--deep --strict` above does not check this, which is
+  # exactly how Sparkle's helpers sailed through it and would have been refused by the notary.
+  ADHOC=""
+  while IFS= read -r nested; do
+    case "$(codesign -dvv "$nested" 2>&1 || true)" in
+      *adhoc*) ADHOC="$ADHOC
+  $(printf '%s' "${nested#$APP/}")" ;;
+    esac
+  done <<EOF
+$(find "$APP/Contents/Frameworks" -maxdepth 6 \( -name "*.xpc" -o -name "*.app" -o -name "*.framework" -o -name "Autoupdate" \) 2>/dev/null)
+EOF
+  [ -z "$ADHOC" ] || die "These are still ad-hoc signed and the notary will refuse them:$ADHOC"
 fi
 ok "signed with a timestamp and the hardened runtime"
 
@@ -186,8 +229,41 @@ if [ "$DRY" = 0 ]; then
   xcrun stapler validate "$DMG" 2>&1 | sed 's/^/  /'
 fi
 
+# ---- 10. The line the appcast needs ---------------------------------------
+# Signed here, after stapling: `stapler staple` rewrites the disk image, so a signature taken
+# before it describes a file that no longer exists. The private key lives in the login Keychain
+# and never leaves this Mac; losing it means no existing copy of Scout can be updated again.
+step "Sign the update"
+SIGN_UPDATE="$(find build/release-derived/SourcePackages/artifacts -name sign_update -type f 2>/dev/null | grep -v old_dsa | head -1)"
+if [ "$DRY" = 0 ] && [ -n "$SIGN_UPDATE" ]; then
+  BUILD_NUMBER="$(sed -nE 's/^ *CURRENT_PROJECT_VERSION: *"?([^"]+)"?/\1/p' project.yml | head -1)"
+  SIGNATURE="$("$SIGN_UPDATE" "$DMG")"
+  ok "signed for Sparkle"
+  echo
+  bold "Paste this into downloads/scout-appcast.xml, newest item first:"
+  cat <<ITEM
+
+    <item>
+      <title>Version $VERSION</title>
+      <sparkle:version>$BUILD_NUMBER</sparkle:version>
+      <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0.0</sparkle:minimumSystemVersion>
+      <pubDate>$(date -u '+%a, %d %b %Y %H:%M:%S +0000')</pubDate>
+      <description><![CDATA[<ul><li>Say what changed here.</li></ul>]]></description>
+      <enclosure url="https://apps.stonemesastudio.com/downloads/$(basename "$DMG")"
+                 $SIGNATURE type="application/octet-stream"/>
+    </item>
+ITEM
+elif [ "$DRY" = 1 ]; then
+  echo "  would sign the disk image with the Sparkle key and print its appcast entry"
+else
+  echo "  sign_update not found — resolve packages first, or the appcast entry cannot be made."
+fi
+
 echo
 bold "✅ $(basename "$DMG") is ready to publish."
 echo "   $DMG"
 echo
-echo "Next: copy it into the download page's assets and deploy the site."
+echo "Next: add the item above to downloads/scout-appcast.xml, copy the disk image into"
+echo "downloads/, and deploy the site. Leave the older disk images where they are — a copy of"
+echo "Scout still on an old version reads its own item out of that file."

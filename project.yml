@@ -19,6 +19,11 @@ settings:
 packages:
   ScoutCore:
     path: Core
+  # Sparkle ships as a prebuilt XCFramework, so nothing here is compiled from source. MIT, which
+  # is one-way compatible into this app's GPL — see THIRD-PARTY.md.
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: "2.9.6"
 
 targets:
   Scout:
@@ -29,6 +34,8 @@ targets:
     dependencies:
       - package: ScoutCore
         product: ScoutCore
+      - package: Sparkle
+        product: Sparkle
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: studio.stonemesa.scout

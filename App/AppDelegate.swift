@@ -4,6 +4,7 @@
 import AppKit
 import Carbon.HIToolbox
 import Contacts
+import Sparkle
 import SwiftUI
 import ScoutCore
 
@@ -15,6 +16,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let welcome = WelcomeWindowController()
     private let settingsWindow = SettingsWindowController()
     private var hotKeyWatcher: Timer?
+
+    /// Checks the website for a newer Scout once a day, and installs one when the user says so.
+    ///
+    /// Built in `applicationDidFinishLaunching` rather than here, so the command-line modes —
+    /// `--shot`, `--diagnose`, `--probe` — never start an updater on their way past.
+    private var updater: SPUStandardUpdaterController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // `Scout --diagnose <path>` writes the report and quits, so the check can be run without
@@ -133,6 +140,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installStatusItem()
         installHotKeys()
 
+        updater = SPUStandardUpdaterController(
+            startingUpdater: true,
+            updaterDelegate: nil,
+            userDriverDelegate: self
+        )
+
         // Begin reading the mail archive straight away rather than waiting for a search.
         panel.startBackgroundIndexing()
 
@@ -192,6 +205,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .target = self
         menu.addItem(withTitle: "Diagnose Sources…", action: #selector(runDiagnostic), keyEquivalent: "")
             .target = self
+        menu.addItem(.separator())
+        // Sparkle's own action, aimed at its controller rather than at this class.
+        let updates = menu.addItem(withTitle: "Check for Updates\u{2026}", action: nil, keyEquivalent: "")
+        updates.target = updater
+        updates.action = #selector(SPUStandardUpdaterController.checkForUpdates(_:))
+
         menu.addItem(.separator())
         menu.addItem(withTitle: "Remove Scout\u{2026}", action: #selector(uninstall), keyEquivalent: "")
             .target = self
@@ -282,5 +301,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// status-item menu is where it goes, next to Quit, which is where somebody leaving will look.
     @objc private func uninstall() {
         Uninstaller.run()
+    }
+}
+
+// MARK: - Updates
+
+/// Scout has no Dock icon and no menu bar of its own, which is exactly the case Sparkle warns
+/// about: left alone, the "a new version is available" window opens behind whatever the person is
+/// working in, and the only sign anything happened is a beach of nothing. So the app takes a Dock
+/// icon for as long as that conversation lasts, and gives it back afterwards.
+extension AppDelegate: SPUStandardUserDriverDelegate {
+
+    nonisolated var supportsGentleScheduledUpdateReminders: Bool { true }
+
+    nonisolated func standardUserDriverWillHandleShowingUpdate(
+        _ handleShowingUpdate: Bool,
+        forUpdate update: SUAppcastItem,
+        state: SPUUserUpdateState
+    ) {
+        MainActor.assumeIsolated {
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
+    nonisolated func standardUserDriverWillFinishUpdateSession() {
+        MainActor.assumeIsolated {
+            // Back to being nothing but a menu bar icon.
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 }
