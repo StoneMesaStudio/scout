@@ -6,6 +6,51 @@ import SwiftUI
 import UniformTypeIdentifiers
 import ScoutCore
 
+/// Icons, worked out once per file rather than once per draw.
+///
+/// Asking the Finder for an icon means a `fileExists` and a `NSWorkspace` lookup, and both were
+/// happening inside the view's body — so every keystroke and every arrow key paid for all of them
+/// again, for every row on screen. On a local disk that is milliseconds a row; on a network volume
+/// that has gone away, `fileExists` blocks until the mount times out.
+@MainActor
+final class IconCache {
+
+    static let shared = IconCache()
+
+    /// Plenty for any search, and small enough that emptying it wholesale costs nothing. There is
+    /// no cleverer eviction because an icon is worth a few kilobytes and the panel is not a
+    /// long-running document window.
+    private static let capacity = 4_000
+    private var icons: [String: NSImage] = [:]
+
+    func appIcon(at url: URL) -> NSImage {
+        cached(url.path) { NSWorkspace.shared.icon(forFile: url.path) }
+    }
+
+    /// The Finder's icon for the file, or — when the file is no longer there — the icon for its
+    /// kind. A blank page next to a filename reads as a broken app; a PDF icon next to a PDF that
+    /// has just been moved reads as the truth.
+    func fileIcon(for result: SearchResult) -> NSImage {
+        cached(result.url.path) {
+            if FileManager.default.fileExists(atPath: result.url.path) {
+                return NSWorkspace.shared.icon(forFile: result.url.path)
+            }
+            if let identifier = result.contentType, let type = UTType(identifier) {
+                return NSWorkspace.shared.icon(for: type)
+            }
+            return NSWorkspace.shared.icon(for: result.kind == .folder ? .folder : .item)
+        }
+    }
+
+    private func cached(_ key: String, _ make: () -> NSImage) -> NSImage {
+        if let known = icons[key] { return known }
+        if icons.count >= Self.capacity { icons.removeAll(keepingCapacity: true) }
+        let icon = make()
+        icons[key] = icon
+        return icon
+    }
+}
+
 /// One line of results, whichever lane produced it. Keeping the layout identical across lanes is
 /// what makes the keys behave identically too.
 struct PanelRowView: View {
@@ -92,9 +137,9 @@ struct PanelRowView: View {
     private var icon: some View {
         switch row {
         case .app(let entry, _):
-            Image(nsImage: NSWorkspace.shared.icon(forFile: entry.url.path)).resizable()
+            Image(nsImage: IconCache.shared.appIcon(at: entry.url)).resizable()
         case .file(let result):
-            Image(nsImage: Self.fileIcon(for: result)).resizable()
+            Image(nsImage: IconCache.shared.fileIcon(for: result)).resizable()
         case .pane:
             symbolIcon("gearshape")
         case .mail:
@@ -108,19 +153,6 @@ struct PanelRowView: View {
         case .reminder(let hit):
             symbolIcon(hit.isCompleted ? "checkmark.circle.fill" : "circle")
         }
-    }
-
-    /// The Finder's icon for the file, or — when the file is no longer there — the icon for its
-    /// kind. A blank page next to a filename reads as a broken app; a PDF icon next to a PDF that
-    /// has just been moved reads as the truth.
-    private static func fileIcon(for result: SearchResult) -> NSImage {
-        if FileManager.default.fileExists(atPath: result.url.path) {
-            return NSWorkspace.shared.icon(forFile: result.url.path)
-        }
-        if let identifier = result.contentType, let type = UTType(identifier) {
-            return NSWorkspace.shared.icon(for: type)
-        }
-        return NSWorkspace.shared.icon(for: result.kind == .folder ? .folder : .item)
     }
 
     private func symbolIcon(_ name: String) -> some View {

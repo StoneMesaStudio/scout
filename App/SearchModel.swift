@@ -126,7 +126,7 @@ final class SearchModel {
     private(set) var hiddenCount: Int = 0
 
     var showHidden: Bool = false {
-        didSet { rebuildSections() }
+        didSet { rankFiles() }
     }
 
     var selection: Int = 0
@@ -265,6 +265,11 @@ final class SearchModel {
     private let settings = ScoutSettings.shared
 
     private var rawFiles: [SearchResult] = []
+
+    /// `rawFiles` after the exclusions and the ranking, which is the expensive part and the one
+    /// that must not happen on the thread drawing the window.
+    private var rankedFiles: [SearchResult] = []
+    private var rankTask: Task<Void, Never>?
     private var mailRows: [PanelRow] = []
     private var messageRows: [PanelRow] = []
     private var contactRows: [PanelRow] = []
@@ -377,7 +382,7 @@ final class SearchModel {
         searcher.onResults = { [weak self] results in
             guard let self else { return }
             self.rawFiles = results
-            self.rebuildSections()
+            self.rankFiles()
         }
     }
 
@@ -398,7 +403,10 @@ final class SearchModel {
     }
 
     private func clearResults() {
+        rankTask?.cancel()
+        rankTask = nil
         rawFiles = []
+        rankedFiles = []
         mailRows = []
         messageRows = []
         contactRows = []
@@ -722,6 +730,7 @@ final class SearchModel {
         }
 
         rawFiles = setup.files
+        rankFiles()
         contactRows = trimmed(setup.contacts.map { PanelRow.contact($0) }, .contacts)
         mailRows = trimmed(setup.mail.map { PanelRow.mail($0) }, .mail)
         messageRows = trimmed(setup.messages.map { PanelRow.message($0) }, .messages)
@@ -833,18 +842,74 @@ final class SearchModel {
         }
     }
 
-    private func fileRows() -> [PanelRow] {
+    /// What the ranking produced, kept together so it can cross back from the thread that did
+    /// the work in one piece.
+    private struct Ranking: Sendable {
+        var files: [SearchResult]
+        var hidden: Int
+        var suggestions: FilterSuggestions
+    }
+
+    /// Rank away from the main thread, then take the answer back.
+    ///
+    /// Spotlight delivers its matches over and over as it gathers, and every delivery used to
+    /// filter, score and sort the whole set on the thread that draws the panel — so the more
+    /// files a word matched, the longer the window stopped responding. Typing was the worst of
+    /// it, because each keystroke starts the deliveries again from nothing.
+    ///
+    /// A photograph has to be complete the moment the shutter opens, so `--shot` ranks in place.
+    private func rankFiles() {
+        rankTask?.cancel()
+
+        let raw = rawFiles
         let exclusions = showHidden ? Exclusions.none : settings.exclusions
-        let kept = rawFiles.filter { !exclusions.excludes($0.url) }
-        hiddenCount = rawFiles.count - kept.count
+        let ranker = self.ranker
+        let query = text
+        let picks = pickMemory.picks(for: query)
 
-        let ranked = ranker.rank(kept, query: text, learnedPicks: pickMemory.picks(for: text))
+        guard !isDemo else {
+            apply(Self.ranking(of: raw, exclusions: exclusions, ranker: ranker,
+                               query: query, picks: picks))
+            return
+        }
 
+        rankTask = Task { [weak self] in
+            let outcome = await Task.detached(priority: .userInitiated) {
+                Self.ranking(of: raw, exclusions: exclusions, ranker: ranker,
+                             query: query, picks: picks)
+            }.value
+            guard !Task.isCancelled, let self else { return }
+            self.apply(outcome)
+            self.rebuildSections()
+        }
+    }
+
+    private func apply(_ ranking: Ranking) {
+        rankedFiles = ranking.files
+        hiddenCount = ranking.hidden
         // Chips are offered from the unfiltered set, so applying one never empties the row that
         // would let you take it back off.
-        suggestions = FilterSuggestions.from(Array(ranked.prefix(300)))
+        suggestions = ranking.suggestions
+    }
 
-        let matching = filter.apply(to: ranked)
+    private nonisolated static func ranking(
+        of raw: [SearchResult],
+        exclusions: Exclusions,
+        ranker: Ranker,
+        query: String,
+        picks: Set<URL>
+    ) -> Ranking {
+        let kept = raw.filter { !exclusions.excludes($0.url) }
+        let ranked = ranker.rank(kept, query: query, learnedPicks: picks)
+        return Ranking(
+            files: ranked,
+            hidden: raw.count - kept.count,
+            suggestions: FilterSuggestions.from(Array(ranked.prefix(300)))
+        )
+    }
+
+    private func fileRows() -> [PanelRow] {
+        let matching = filter.apply(to: rankedFiles)
         // A believable total for the screenshot: "4 of 1,090" is the part of the design worth
         // photographing, and a bare 4 says the opposite of what it should.
         laneTotals[.files] = isDemo ? 1_090 : matching.count

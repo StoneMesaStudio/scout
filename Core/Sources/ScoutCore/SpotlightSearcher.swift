@@ -25,6 +25,11 @@ public final class SpotlightSearcher {
     }
     private nonisolated let tokens = TokenBox()
 
+    private static let throttle = DeliveryThrottle(gap: .milliseconds(350))
+
+    private var pendingDelivery: Task<Void, Never>?
+    private var lastDelivery: ContinuousClock.Instant?
+
     public init(home: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.home = home
         query.notificationBatchingInterval = 0.12
@@ -37,8 +42,13 @@ public final class SpotlightSearcher {
             NSNotification.Name.NSMetadataQueryDidFinishGathering,
             NSNotification.Name.NSMetadataQueryDidUpdate,
         ] {
+            // Finishing is the one notification worth interrupting anything for: it is the
+            // complete answer, and it arrives once. Progress and updates are coalesced.
+            let isFinal = name == NSNotification.Name.NSMetadataQueryDidFinishGathering
             let token = center.addObserver(forName: name, object: query, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.publish() }
+                MainActor.assumeIsolated {
+                    if isFinal { self?.deliverNow() } else { self?.scheduleDelivery() }
+                }
             }
             tokens.tokens.append(token)
         }
@@ -50,7 +60,33 @@ public final class SpotlightSearcher {
     }
 
     public func stop() {
+        cancelPendingDelivery()
         query.stop()
+    }
+
+    /// Queue a delivery, unless one is already queued.
+    private func scheduleDelivery() {
+        guard pendingDelivery == nil else { return }
+
+        let wait = Self.throttle.wait(sinceLastDelivery: lastDelivery.map { ContinuousClock().now - $0 })
+
+        pendingDelivery = Task { [weak self] in
+            if wait > .zero { try? await Task.sleep(for: wait) }
+            guard !Task.isCancelled else { return }
+            self?.pendingDelivery = nil
+            self?.publish()
+        }
+    }
+
+    /// Deliver at once, dropping anything queued — it would only repeat this.
+    private func deliverNow() {
+        cancelPendingDelivery()
+        publish()
+    }
+
+    private func cancelPendingDelivery() {
+        pendingDelivery?.cancel()
+        pendingDelivery = nil
     }
 
     /// Start a fresh search. Calling this again replaces the one in flight.
@@ -64,6 +100,8 @@ public final class SpotlightSearcher {
 
     /// Search a specific set of directories. An empty list means the whole indexed Mac.
     public func search(_ text: String, directories: [URL]) {
+        // Anything queued belongs to the word that was typed before this one.
+        cancelPendingDelivery()
         query.stop()
 
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -96,6 +134,7 @@ public final class SpotlightSearcher {
     }
 
     private func publish() {
+        lastDelivery = ContinuousClock().now
         query.disableUpdates()
         defer { query.enableUpdates() }
 
