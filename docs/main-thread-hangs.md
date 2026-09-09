@@ -83,6 +83,31 @@ if it ever shows up in a real report.
   another full walk. It saturates disk I/O for hours after launch, which lengthens every blocking
   main-thread call above.
 
+## The permission prompts that arrived at random · FIXED 2026-09-09
+
+Separate from the Settings heartbeat above, and the one the user actually noticed. macOS asks for
+Documents, Desktop and Downloads the first time something reads one, and Scout reads all three on
+every search — `SpotlightSearcher` sets them as the query's search scopes, and `warmUp` opens them.
+
+The panel is `.floating` with `hidesOnDeactivate = true` (`PanelController.swift:169, 172`) and
+macOS draws its permission prompts in ordinary windows. So a prompt raised while somebody is typing
+lands *behind* the panel. Nothing appears to happen, so nothing gets answered, so the permission
+stays undecided and the next search asks again — and the prompt finally surfaces whenever the panel
+happens to go away, with nothing on screen to explain it.
+
+The app already knew this. `SearchModel.requestContactsAccess` and `requestRemindersAccess` both
+route their prompts through the Settings window for exactly this reason, and both say so in a
+comment. The folders had no such route because nothing asks for them deliberately — searching just
+touches them.
+
+Fixed by `AppDelegate.askAboutFoldersOnce`: opened once ever, at launch, with no panel in front,
+off the main thread. `ScoutSettings.hasAskedForFolders` records that it happened whatever the
+answer was, because asking twice is the bug.
+
+Still open, if it ever matters: a Files section notice for the denied case, the way Contacts has
+one. And on Whole Mac, a brand-new `/Volumes/` path can still raise its own prompt from the icon
+lookup in `PanelRowView`.
+
 ## What the databases got right
 
 Every index service (`MailSearchService`, `MessageSearchService`, `NotesSearchService`,

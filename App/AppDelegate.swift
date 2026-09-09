@@ -170,6 +170,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ScoutSettings.shared.hasSeenWelcome = true
             welcome.show()
         }
+
+        askAboutFoldersOnce()
+    }
+
+    /// Put the Documents, Desktop and Downloads question at a moment when the user can see it.
+    ///
+    /// macOS asks for those three the first time something reads one, and Scout reads all three
+    /// every time it searches. That sounds harmless and is not: the panel is a floating window and
+    /// macOS draws its permission prompts in ordinary ones, so a prompt raised while somebody is
+    /// typing goes *behind* the panel. Nothing appears to happen, so nothing gets answered, so the
+    /// permission stays undecided and the next search asks again — and the prompt finally surfaces
+    /// whenever the panel happens to go away, with nothing on screen to explain it. That is the
+    /// "random" permission request, and it is the same trap `requestContactsAccess` documents.
+    ///
+    /// Asked here instead: once ever, at launch, with no panel in front of it. On a first run the
+    /// welcome window is up, which is an ordinary window and a good place for it to land.
+    ///
+    /// Off the main thread because opening a folder the iCloud file provider has let go cold takes
+    /// as long as it takes, and because the prompt itself waits for a human.
+    private func askAboutFoldersOnce() {
+        guard !ScoutSettings.shared.hasAskedForFolders else { return }
+
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let folders = ["Documents", "Desktop", "Downloads"].map { home.appending(path: $0) }
+
+        Task {
+            await Task.detached(priority: .utility) {
+                for folder in folders {
+                    let descriptor = Darwin.open(folder.path, O_RDONLY | O_DIRECTORY)
+                    if descriptor >= 0 { Darwin.close(descriptor) }
+                }
+            }.value
+            // Set whatever the answers were. Asking a second time is the bug being fixed.
+            ScoutSettings.shared.hasAskedForFolders = true
+        }
     }
 
     // MARK: - Menu bar

@@ -54,6 +54,7 @@ final class ScoutSettings {
         sourceButtonStyle = SourceButtonStyle(rawValue: store.string(forKey: Key.sourceButtonStyle) ?? "")
             ?? .textOnly
         hasSeenWelcome = store.bool(forKey: Key.hasSeenWelcome)
+        hasAskedForFolders = store.bool(forKey: Key.hasAskedForFolders)
         hideCommandSpaceHint = store.bool(forKey: Key.hideCommandSpaceHint)
         searchMailBodies = store.object(forKey: Key.searchMailBodies) as? Bool ?? true
 
@@ -78,6 +79,7 @@ final class ScoutSettings {
         static let resultsPerSource = "resultsPerSource"
         static let sourceButtonStyle = "sourceButtonStyle"
         static let hasSeenWelcome = "hasSeenWelcome"
+        static let hasAskedForFolders = "hasAskedForFolders"
         static let panelFrame = "panelFrame"
         static let hideCommandSpaceHint = "hideCommandSpaceHint"
         static let searchMailBodies = "searchMailBodies"
@@ -169,6 +171,12 @@ final class ScoutSettings {
     /// Typing an app's name exactly puts that app at the top of the file results.
     var pinExactAppMatch: Bool {
         didSet { store.set(pinExactAppMatch, forKey: Key.pinExactAppMatch) }
+    }
+
+    /// Whether Scout has put the Documents, Desktop and Downloads question to the user at a
+    /// moment of its own choosing. See `AppDelegate.askAboutFoldersOnce`.
+    var hasAskedForFolders: Bool {
+        didSet { store.set(hasAskedForFolders, forKey: Key.hasAskedForFolders) }
     }
 
     var hasSeenWelcome: Bool {
