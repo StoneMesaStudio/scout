@@ -404,6 +404,9 @@ struct SearchRootView: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
+        // Its own ground, so the row of keys reads as the edge of the panel rather than as one
+        // more line of results that happens to be at the bottom.
+        .background(Color.primary.opacity(0.10))
     }
 
     /// One set of key hints, in the order given.
@@ -795,62 +798,63 @@ private struct SectionHeader: View {
 
     private var hasMore: Bool { total > count }
 
+    /// A hairline, a dot of the source's colour, and the name in small grey capitals.
+    ///
+    /// It used to be a filled band in the source's colour, carrying a coloured pill and two filled
+    /// buttons, five times down a page. That is five saturated stripes competing with the results
+    /// for attention, and the results are the only thing anybody opened the panel to read. Apple
+    /// does not fill a section heading anywhere in the system, and this is why.
+    ///
+    /// What survives is the part that was doing work: the colour still says which source this is
+    /// without anybody reading the word, but it says it in a seven-point dot instead of a stripe.
     var body: some View {
-        HStack(spacing: 9) {
-            // A solid bar down the leading edge, so the start of a section is findable at a
-            // glance from anywhere in the column.
-            RoundedRectangle(cornerRadius: 2)
-                .fill(lane.tint)
-                .frame(width: 4)
+        VStack(spacing: 7) {
+            Divider().opacity(0.45)
 
-            Image(systemName: lane.symbol)
-                .font(.system(size: 12, weight: .semibold))
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(lane.tint)
+                    .frame(width: 7, height: 7)
 
-            Text(lane.title.uppercased())
-                .font(.system(size: 12, weight: .bold))
-                .tracking(0.6)
+                Text(lane.title.uppercased())
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(0.8)
+                    .foregroundStyle(.secondary)
 
-            // "10 of 94" rather than a bare 10 — the difference between "that is all there is"
-            // and "there is plenty more".
-            Text(hasMore ? "\(count) of \(total.formatted())" : "\(count)")
-                .font(.system(size: 11.5, weight: .medium, design: .rounded))
-                .padding(.horizontal, 7)
-                .padding(.vertical, 1.5)
-                .background(lane.tint.opacity(0.22), in: Capsule())
+                // "10 of 94" rather than a bare 10 — the difference between "that is all there is"
+                // and "there is plenty more".
+                Text(hasMore ? "\(count) of \(total.formatted())" : "\(count)")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.tertiary)
 
-            Spacer(minLength: 8)
+                Spacer(minLength: 8)
 
-            if isSoloed {
-                action("Show all sources", symbol: "arrow.uturn.backward", perform: onShowEverySource)
-            } else {
-                if hasMore {
-                    action(total > SearchModel.maximumDrawn ? "Show \(SearchModel.maximumDrawn)" : "Show all",
-                           symbol: "arrow.down.to.line",
-                           perform: onExpand)
-                }
-                if count > 0 {
-                    action("Show only \(lane.title)", symbol: "line.3.horizontal.decrease", perform: onSolo)
+                if isSoloed {
+                    action("Show all sources", perform: onShowEverySource)
+                } else {
+                    if hasMore {
+                        action(total > SearchModel.maximumDrawn ? "Show \(SearchModel.maximumDrawn)" : "Show all",
+                               perform: onExpand)
+                    }
+                    if count > 0 {
+                        action("Only \(lane.title)", perform: onSolo)
+                    }
                 }
             }
+            .padding(.horizontal, 10)
         }
-        .foregroundStyle(lane.tint)
-        .padding(.leading, 6)
-        .padding(.trailing, 8)
-        .padding(.vertical, 7)
-        .background(lane.tint.opacity(0.13), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .padding(.top, 10)
-        .padding(.bottom, 3)
+        .padding(.top, 26)
+        .padding(.bottom, 8)
     }
 
-    private func action(_ title: String, symbol: String, perform: @escaping () -> Void) -> some View {
+    /// Words, not buttons. There are up to two of these on every heading and up to eight headings
+    /// on a page; as filled capsules that was sixteen coloured objects between the reader and the
+    /// results.
+    private func action(_ title: String, perform: @escaping () -> Void) -> some View {
         Button(action: perform) {
-            HStack(spacing: 4) {
-                Image(systemName: symbol).font(.system(size: 9, weight: .bold))
-                Text(title).font(.system(size: 11.5, weight: .semibold))
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(lane.tint.opacity(0.18), in: Capsule())
+            Text(title)
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
         }
         .buttonStyle(.plain)
     }

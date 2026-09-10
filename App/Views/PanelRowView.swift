@@ -180,7 +180,9 @@ struct PanelRowView: View {
             }
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        // Roomier than it was. The panel is read in a glance, and six points of leading made
+        // eight sources look like one long undifferentiated list.
+        .padding(.vertical, 10)
         .background { if selected { selectionCard } }
     }
 
