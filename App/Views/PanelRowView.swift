@@ -23,31 +23,105 @@ final class IconCache {
     private static let capacity = 4_000
     private var icons: [String: NSImage] = [:]
 
-    func appIcon(at url: URL) -> NSImage {
-        cached(url.path) { NSWorkspace.shared.icon(forFile: url.path) }
+    /// What is already known, and can be drawn this instant. `nil` means ask for it.
+    func known(_ path: String) -> NSImage? { icons[path] }
+
+    /// The icon macOS has for a kind of thing, with no disk involved.
+    ///
+    /// Drawn while the real one is being fetched. It is the right icon for the file's type — a PDF
+    /// gets the PDF page, a folder gets a folder — so the row does not visibly change shape when
+    /// the real one lands, and often does not visibly change at all.
+    nonisolated static func placeholder(for result: SearchResult) -> NSImage {
+        if let identifier = result.contentType, let type = UTType(identifier) {
+            return NSWorkspace.shared.icon(for: type)
+        }
+        return NSWorkspace.shared.icon(for: result.kind == .folder ? .folder : .item)
     }
 
-    /// The Finder's icon for the file, or — when the file is no longer there — the icon for its
-    /// kind. A blank page next to a filename reads as a broken app; a PDF icon next to a PDF that
-    /// has just been moved reads as the truth.
-    func fileIcon(for result: SearchResult) -> NSImage {
-        cached(result.url.path) {
-            if FileManager.default.fileExists(atPath: result.url.path) {
-                return NSWorkspace.shared.icon(forFile: result.url.path)
+    nonisolated static func applicationPlaceholder() -> NSImage {
+        NSWorkspace.shared.icon(for: .application)
+    }
+
+    /// Ask the Finder, away from the thread that draws the window.
+    ///
+    /// `fileExists` and `icon(forFile:)` both go to disk, and on this Mac most results live under
+    /// an iCloud-managed Documents folder, so both go through the file provider — which answers
+    /// when it answers. Inside a SwiftUI body that meant every keystroke paying for every row's
+    /// icon on the main thread, and a slow answer stopped the window.
+    func resolve(_ result: SearchResult) async -> NSImage {
+        if let known = icons[result.url.path] { return known }
+
+        let path = result.url.path
+        let contentType = result.contentType
+        let kind = result.kind
+        let icon = await Task.detached(priority: .userInitiated) {
+            if FileManager.default.fileExists(atPath: path) {
+                return NSWorkspace.shared.icon(forFile: path)
             }
-            if let identifier = result.contentType, let type = UTType(identifier) {
+            if let identifier = contentType, let type = UTType(identifier) {
                 return NSWorkspace.shared.icon(for: type)
             }
-            return NSWorkspace.shared.icon(for: result.kind == .folder ? .folder : .item)
+            return NSWorkspace.shared.icon(for: kind == .folder ? .folder : .item)
+        }.value
+
+        store(icon, at: path)
+        return icon
+    }
+
+    func resolveApplication(at url: URL) async -> NSImage {
+        if let known = icons[url.path] { return known }
+
+        let path = url.path
+        let icon = await Task.detached(priority: .userInitiated) {
+            NSWorkspace.shared.icon(forFile: path)
+        }.value
+
+        store(icon, at: path)
+        return icon
+    }
+
+    private func store(_ icon: NSImage, at path: String) {
+        if icons.count >= Self.capacity { icons.removeAll(keepingCapacity: true) }
+        icons[path] = icon
+    }
+}
+
+/// One row's icon: whatever is already known, or the icon for its kind until the Finder answers.
+///
+/// A view of its own so that one slow answer redraws one row rather than the whole list.
+private struct RowIcon: View {
+
+    enum Source: Equatable {
+        case file(SearchResult)
+        case application(URL)
+
+        var path: String {
+            switch self {
+            case .file(let result): result.url.path
+            case .application(let url): url.path
+            }
         }
     }
 
-    private func cached(_ key: String, _ make: () -> NSImage) -> NSImage {
-        if let known = icons[key] { return known }
-        if icons.count >= Self.capacity { icons.removeAll(keepingCapacity: true) }
-        let icon = make()
-        icons[key] = icon
-        return icon
+    let source: Source
+    @State private var resolved: NSImage?
+
+    var body: some View {
+        Image(nsImage: resolved ?? IconCache.shared.known(source.path) ?? fallback)
+            .resizable()
+            .task(id: source.path) {
+                switch source {
+                case .file(let result): resolved = await IconCache.shared.resolve(result)
+                case .application(let url): resolved = await IconCache.shared.resolveApplication(at: url)
+                }
+            }
+    }
+
+    private var fallback: NSImage {
+        switch source {
+        case .file(let result): IconCache.placeholder(for: result)
+        case .application: IconCache.applicationPlaceholder()
+        }
     }
 }
 
@@ -137,9 +211,9 @@ struct PanelRowView: View {
     private var icon: some View {
         switch row {
         case .app(let entry, _):
-            Image(nsImage: IconCache.shared.appIcon(at: entry.url)).resizable()
+            RowIcon(source: .application(entry.url))
         case .file(let result):
-            Image(nsImage: IconCache.shared.fileIcon(for: result)).resizable()
+            RowIcon(source: .file(result))
         case .pane:
             symbolIcon("gearshape")
         case .mail:

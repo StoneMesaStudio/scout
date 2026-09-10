@@ -172,6 +172,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         askAboutFoldersOnce()
+
+        // Nothing about this app can see a hang on somebody else's Mac, and the one being chased
+        // has never happened while anyone was looking. So it watches for itself.
+        HangWatchdog.shared.start()
     }
 
     /// Put the Documents, Desktop and Downloads question at a moment when the user can see it.

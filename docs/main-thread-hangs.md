@@ -60,6 +60,32 @@ Still true: the *first* lookup for a path is on the main thread. If a stranger s
 disconnected network volume, that first draw still blocks. Worth moving to a placeholder-then-fill
 if it ever shows up in a real report.
 
+## 3b. Icons resolved on the main thread, properly this time · FIXED 2026-09-09
+
+The cache above fixed the repeat cost and not the first one, and the first one was the expensive
+one: most of John's results live under an iCloud-managed Documents folder, so `fileExists` and
+`icon(forFile:)` both go through the file provider, which answers when it answers. Ten new paths a
+keystroke, each one a trip to a daemon, on the thread drawing the window.
+
+`RowIcon` now draws the icon for the file's *type* — which needs no disk — and asks the Finder for
+the real one on a detached task. One slow answer redraws one row instead of stopping the panel. The
+placeholder is the right icon for the kind, so most rows never visibly change.
+
+## The watchdog
+
+`App/HangWatchdog.swift`. Asks the main thread whether it is still there four times a second, and
+when it stops answering for two seconds — which is when macOS draws the wheel — runs `sample`
+against this process and writes the result to
+`~/Library/Application Support/Scout/hangs/hang-<timestamp>.txt`, newest ten kept.
+
+Proved by making the app hang on purpose for six seconds: the report appeared, said "not answering
+for 2.2 seconds", and named the exact line. Stack traces and library names only, nothing about what
+was being searched for, and it goes nowhere.
+
+This exists because three separate causes have now been found for one symptom and each was found by
+sampling a live process at the right moment. Waiting for that moment to be noticed by a person is
+the slow way.
+
 ## 4–8. Found by audit, not yet measured against real use · NOT FIXED
 
 - **Permissions heartbeat.** FIXED 2026-09-09, and it was worse than a hang. Every 2 s the tab read
