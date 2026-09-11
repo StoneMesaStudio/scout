@@ -359,6 +359,12 @@ extension AppDelegate: SPUStandardUserDriverDelegate {
         state: SPUUserUpdateState
     ) {
         MainActor.assumeIsolated {
+            // The panel goes away first, and that is not politeness — it is the fourth time this
+            // has bitten. The panel is a floating window, Sparkle's is an ordinary one, and a
+            // floating window sits above an ordinary one no matter which app is in front. So the
+            // update window opened *behind* the search panel and looked like nothing happened,
+            // exactly as the Contacts and Reminders prompts did before they were routed around it.
+            panel.hide()
             NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
         }
