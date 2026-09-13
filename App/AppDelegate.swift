@@ -44,18 +44,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // `Scout --selftest <query>` lays the panel out offscreen and prints what it measured,
-        // so a layout that silently collapses can be caught without anyone watching the screen.
+        // `Scout --selftest <query> [path] [myFiles|wholeMac] [seconds]` lays the panel out
+        // offscreen, runs the real search against the real disk, and reports what it drew — plus
+        // the longest the main thread went without answering, which is the beachball as a number.
         if let index = CommandLine.arguments.firstIndex(of: "--selftest") {
-            let query = CommandLine.arguments.count > index + 1 ? CommandLine.arguments[index + 1] : "service"
+            let arguments = Array(CommandLine.arguments.dropFirst(index + 1))
+            let query = arguments.first ?? "service"
             // A path to write to, because launching through LaunchServices — which is the only
             // way the app carries its own permissions — leaves nowhere for stdout to go.
-            let destination = CommandLine.arguments.count > index + 2
-                ? URL(filePath: CommandLine.arguments[index + 2])
-                : nil
-            _ = panel.selfTest(query: query)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
+            let destination = arguments.count > 1 ? URL(filePath: arguments[1]) : nil
+            let scope = arguments.count > 2 ? SearchScope(rawValue: arguments[2]) : nil
+            let seconds = arguments.count > 3 ? Double(arguments[3]) ?? 3.5 : 3.5
+
+            _ = panel.selfTest(query: query, scope: scope)
+            // Started once the panel exists, so building the window is not counted as a stall.
+            let meter = StallMeter()
+            meter.start()
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
                 let report = self.panel.selfTestSummary()
+                    + String(format: "\nlongest the main thread could not answer: %.0f ms", meter.worstMilliseconds)
                 if let destination {
                     try? report.write(to: destination, atomically: true, encoding: .utf8)
                 } else {
@@ -375,5 +383,29 @@ extension AppDelegate: SPUStandardUserDriverDelegate {
             // Back to being nothing but a menu bar icon.
             NSApp.setActivationPolicy(.accessory)
         }
+    }
+}
+
+/// Asks the main thread to answer every 10 ms and keeps the longest wait. `--selftest` reports it,
+/// so a slow panel shows up as a number rather than as somebody's description of a feeling.
+@MainActor
+private final class StallMeter {
+    private var timer: Timer?
+    private var last = DispatchTime.now()
+    private(set) var worstMilliseconds = 0.0
+
+    func start() {
+        last = DispatchTime.now()
+        let timer = Timer(timeInterval: 0.01, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    private func tick() {
+        let now = DispatchTime.now()
+        worstMilliseconds = max(worstMilliseconds, Double(now.uptimeNanoseconds - last.uptimeNanoseconds) / 1_000_000)
+        last = now
     }
 }

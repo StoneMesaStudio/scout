@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Stone Mesa Studio, LLC
 
 import AppKit
+import ScoutCore
 import SwiftUI
 
 /// A borderless panel that floats over whatever app is in front — the same behaviour as
@@ -36,13 +37,14 @@ final class PanelController {
     /// Bring the panel up offscreen, run a query through it, and report what the layout did.
     /// Used by `Scout --selftest`, because "the results are drawn into a zero-height box" is a
     /// bug no unit test catches and no one can see without the app in front of them.
-    func selfTest(query: String) -> String {
+    func selfTest(query: String, scope: SearchScope? = nil) -> String {
         let panel = existingOrNewPanel()
         panel.setFrame(NSRect(x: -6000, y: 0, width: 900, height: 800), display: false)
         panel.orderFront(nil)
         panel.layoutIfNeeded()
 
         model.reset()
+        if let scope { model.scope = scope }
         model.text = query
         return summary(of: panel)
     }
