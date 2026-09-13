@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Stone Mesa Studio, LLC
 
 import Foundation
+import Synchronization
 
 /// Reads the same index Spotlight and Finder read, through `NSMetadataQuery`.
 ///
@@ -9,37 +10,71 @@ import Foundation
 /// covering names, dates, tags and the text inside documents. What the system does not expose is
 /// its ordering, which is exactly the part being replaced: this asks for raw matches and hands
 /// them to `Ranker`.
-@MainActor
-public final class SpotlightSearcher {
+///
+/// **Two rules, both paid for in beachballs.**
+///
+/// 1. *Declare the attributes up front.* Asking a result for its name, kind, dates or size one at
+///    a time is a round trip to the Spotlight server each — measured at 257–354 µs apiece, so five
+///    of them per match came to 1.57 ms, and 6,818 matches held the main thread for 3.7 seconds.
+///    Named in `valueListAttributes`, the same values come back with the results and read in about
+///    0.06 µs. The path is the exception: it is not a stored attribute, the list returns nothing
+///    for it, and the item already carries it locally for 3 µs.
+///
+/// 2. *Keep the query off the main thread.* Starting a query resolves and opens every folder in its
+///    scope, and a folder the iCloud file provider has let go cold took 54,951 ms to open on one Mac
+///    and 0.0 ms on the next five tries. The query lives on its own serial queue, so however long
+///    Spotlight or the file provider takes, the panel keeps drawing and only the file results are
+///    late. Finished results cross to the main thread in one piece.
+public final class SpotlightSearcher: @unchecked Sendable {
 
-    /// Raw matches, delivered as the query gathers them and again when it settles.
-    public var onResults: (([SearchResult]) -> Void)?
+    /// Raw matches, delivered on the main thread as the query gathers them and again when it
+    /// settles. Set once, before the first search.
+    @MainActor public var onResults: (([SearchResult]) -> Void)?
 
-    private let query = NSMetadataQuery()
-    private let home: URL
-
-    /// Notification tokens, held outside actor isolation so `deinit` can unregister them.
-    /// Only ever written on the main actor, in `init`.
-    private final class TokenBox: @unchecked Sendable {
-        var tokens: [NSObjectProtocol] = []
-    }
-    private nonisolated let tokens = TokenBox()
+    /// The values that come back with the results rather than one round trip at a time.
+    private static let declaredAttributes = [
+        NSMetadataItemDisplayNameKey,
+        NSMetadataItemContentTypeKey,
+        NSMetadataItemFSContentChangeDateKey,
+        NSMetadataItemLastUsedDateKey,
+        NSMetadataItemFSSizeKey,
+    ]
 
     private static let throttle = DeliveryThrottle(gap: .milliseconds(350))
 
-    private var pendingDelivery: Task<Void, Never>?
-    private var lastDelivery: ContinuousClock.Instant?
+    private let home: URL
 
-    /// The search waiting for its folders to be opened, and the warm-up it is waiting on.
-    private var startTask: Task<Void, Never>?
-    private var warmTask: Task<Void, Never>?
-    private var warmingDirectories: [URL] = []
+    /// Everything below this line is touched only on `queue`.
+    private let queue = DispatchQueue(label: "studio.stonemesa.scout.spotlight", qos: .userInitiated)
+    private let operations = OperationQueue()
+    private let query = NSMetadataQuery()
+    private var pendingDelivery: DispatchWorkItem?
+    private var lastDelivery: ContinuousClock.Instant?
+    /// Which search the running query belongs to. Its deliveries carry this number.
+    private var runningGeneration = 0
+
+    /// Bumped on the caller's thread by every `search` and `stop`, so a delivery already on its
+    /// way to the main thread can tell it has been overtaken and drop itself. Without this, results
+    /// for the word typed a moment ago land after the panel has been cleared for the new one.
+    private let generation = Atomic<Int>(0)
+
+    /// Notification tokens, kept so `deinit` can unregister them.
+    private final class TokenBox: @unchecked Sendable {
+        var tokens: [NSObjectProtocol] = []
+    }
+    private let tokens = TokenBox()
 
     public init(home: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.home = home
+
+        operations.underlyingQueue = queue
+        operations.maxConcurrentOperationCount = 1
+
+        query.operationQueue = operations
         query.notificationBatchingInterval = 0.12
-        // We sort ourselves, so ask the system for nothing but the matches.
+        // We sort ourselves, so the system is asked for no ordering at all.
         query.sortDescriptors = []
+        query.valueListAttributes = Self.declaredAttributes
 
         let center = NotificationCenter.default
         for name in [
@@ -50,10 +85,8 @@ public final class SpotlightSearcher {
             // Finishing is the one notification worth interrupting anything for: it is the
             // complete answer, and it arrives once. Progress and updates are coalesced.
             let isFinal = name == NSNotification.Name.NSMetadataQueryDidFinishGathering
-            let token = center.addObserver(forName: name, object: query, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    if isFinal { self?.deliverNow() } else { self?.scheduleDelivery() }
-                }
+            let token = center.addObserver(forName: name, object: query, queue: operations) { [weak self] _ in
+                if isFinal { self?.deliverNow() } else { self?.scheduleDelivery() }
             }
             tokens.tokens.append(token)
         }
@@ -64,37 +97,7 @@ public final class SpotlightSearcher {
         for token in tokens.tokens { center.removeObserver(token) }
     }
 
-    public func stop() {
-        cancelPendingDelivery()
-        startTask?.cancel()
-        startTask = nil
-        query.stop()
-    }
-
-    /// Queue a delivery, unless one is already queued.
-    private func scheduleDelivery() {
-        guard pendingDelivery == nil else { return }
-
-        let wait = Self.throttle.wait(sinceLastDelivery: lastDelivery.map { ContinuousClock().now - $0 })
-
-        pendingDelivery = Task { [weak self] in
-            if wait > .zero { try? await Task.sleep(for: wait) }
-            guard !Task.isCancelled else { return }
-            self?.pendingDelivery = nil
-            self?.publish()
-        }
-    }
-
-    /// Deliver at once, dropping anything queued — it would only repeat this.
-    private func deliverNow() {
-        cancelPendingDelivery()
-        publish()
-    }
-
-    private func cancelPendingDelivery() {
-        pendingDelivery?.cancel()
-        pendingDelivery = nil
-    }
+    // MARK: - Asking
 
     /// Start a fresh search. Calling this again replaces the one in flight.
     ///
@@ -107,60 +110,39 @@ public final class SpotlightSearcher {
 
     /// Search a specific set of directories. An empty list means the whole indexed Mac.
     public func search(_ text: String, directories: [URL]) {
-        // Anything queued belongs to the word that was typed before this one.
-        cancelPendingDelivery()
-        startTask?.cancel()
-        query.stop()
-
+        let current = generation.add(1, ordering: .relaxed).newValue
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
         guard trimmed.count >= 2 else {
-            onResults?([])
+            queue.async { [self] in halt() }
+            deliver([], for: current)
             return
         }
 
-        let warm = warmUp(directories)
-        startTask = Task { [weak self] in
-            await warm.value
-            guard !Task.isCancelled, let self else { return }
-            self.startTask = nil
-            self.begin(trimmed, directories: directories)
+        queue.async { [self] in
+            halt()
+
+            // Open every folder about to be searched before starting, here, where waiting costs
+            // nothing. `start()` opens them anyway; doing it first means a cold iCloud folder holds
+            // up this queue rather than the window.
+            for url in directories {
+                let descriptor = Darwin.open(url.path, O_RDONLY | O_DIRECTORY)
+                if descriptor >= 0 { Darwin.close(descriptor) }
+            }
+
+            // Somebody kept typing while the folders were being opened.
+            guard generation.load(ordering: .relaxed) == current else { return }
+
+            runningGeneration = current
+            query.predicate = Self.predicate(for: trimmed)
+            query.searchScopes = directories.isEmpty ? [NSMetadataQueryLocalComputerScope] : directories
+            query.start()
         }
     }
 
-    /// Open every folder that is about to be searched, on a thread where waiting costs nothing.
-    ///
-    /// `NSMetadataQuery.start()` resolves and opens each search scope before it returns. A folder
-    /// the iCloud file provider has let go cold can take the better part of a minute to open —
-    /// measured at 54,951 ms on one Mac, and 0.0 ms on each of the next five tries. Paying that
-    /// inside `start()` means paying it on the thread that draws the window, once per keystroke,
-    /// which is exactly what the beachball was.
-    ///
-    /// Paid here instead, the panel stays alive and only the file results are late. It is not a
-    /// cache: a folder that has gone cold again has to be opened again, and the point is only ever
-    /// *where* that happens. When the folders are warm this costs a hop between threads.
-    private func warmUp(_ directories: [URL]) -> Task<Void, Never> {
-        // A warm-up already running for the same folders is the one to wait on. A second would
-        // only queue behind it inside the same daemon.
-        if let running = warmTask, warmingDirectories == directories { return running }
-
-        warmingDirectories = directories
-        let task = Task { [weak self] in
-            await Task.detached(priority: .userInitiated) {
-                for url in directories {
-                    let descriptor = Darwin.open(url.path, O_RDONLY | O_DIRECTORY)
-                    if descriptor >= 0 { Darwin.close(descriptor) }
-                }
-            }.value
-            self?.warmTask = nil
-        }
-        warmTask = task
-        return task
-    }
-
-    private func begin(_ text: String, directories: [URL]) {
-        query.predicate = Self.predicate(for: text)
-        query.searchScopes = directories.isEmpty ? [NSMetadataQueryLocalComputerScope] : directories
-        query.start()
+    public func stop() {
+        generation.add(1, ordering: .relaxed)
+        queue.async { [self] in halt() }
     }
 
     /// Matches the query against names first and document text second.
@@ -168,7 +150,7 @@ public final class SpotlightSearcher {
     /// `LIKE[cd]` is case- and diacritic-insensitive; the `*` wildcards make it a contains match.
     /// Any `*` or `?` the user typed is escaped so it searches for the character rather than
     /// acting as a wildcard.
-    public nonisolated static func predicate(for text: String) -> NSPredicate {
+    public static func predicate(for text: String) -> NSPredicate {
         let escaped = text
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "*", with: "\\*")
@@ -181,11 +163,42 @@ public final class SpotlightSearcher {
         ])
     }
 
+    // MARK: - On the queue
+
+    private func halt() {
+        pendingDelivery?.cancel()
+        pendingDelivery = nil
+        query.stop()
+    }
+
+    /// Queue a delivery, unless one is already queued.
+    private func scheduleDelivery() {
+        guard pendingDelivery == nil else { return }
+
+        let wait = Self.throttle.wait(sinceLastDelivery: lastDelivery.map { ContinuousClock().now - $0 })
+        let parts = wait.components
+        let seconds = Double(parts.seconds) + Double(parts.attoseconds) / 1e18
+
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            pendingDelivery = nil
+            publish()
+        }
+        pendingDelivery = work
+        queue.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
+
+    /// Deliver at once, dropping anything queued — it would only repeat this.
+    private func deliverNow() {
+        pendingDelivery?.cancel()
+        pendingDelivery = nil
+        publish()
+    }
+
     private func publish() {
         lastDelivery = ContinuousClock().now
-        query.disableUpdates()
-        defer { query.enableUpdates() }
 
+        query.disableUpdates()
         var results: [SearchResult] = []
         results.reserveCapacity(query.resultCount)
 
@@ -193,17 +206,22 @@ public final class SpotlightSearcher {
             guard let item = query.result(at: index) as? NSMetadataItem,
                   let path = item.value(forAttribute: NSMetadataItemPathKey) as? String
             else { continue }
-            results.append(Self.result(from: item, path: path))
+            results.append(result(at: index, path: path))
         }
+        query.enableUpdates()
 
-        onResults?(results)
+        deliver(results, for: runningGeneration)
     }
 
-    private static func result(from item: NSMetadataItem, path: String) -> SearchResult {
+    /// Everything but the path, read from what the query already holds.
+    private func result(at index: Int, path: String) -> SearchResult {
+        func value<T>(_ attribute: String, as: T.Type) -> T? {
+            query.value(ofAttribute: attribute, forResultAt: index) as? T
+        }
+
         let url = URL(filePath: path)
-        let contentType = item.value(forAttribute: NSMetadataItemContentTypeKey) as? String
-        let name = (item.value(forAttribute: NSMetadataItemDisplayNameKey) as? String)
-            ?? url.lastPathComponent
+        let contentType = value(NSMetadataItemContentTypeKey, as: String.self)
+        let name = value(NSMetadataItemDisplayNameKey, as: String.self) ?? url.lastPathComponent
 
         let kind: SearchResult.Kind
         switch contentType {
@@ -217,9 +235,17 @@ public final class SpotlightSearcher {
             displayName: name,
             kind: kind,
             contentType: contentType,
-            modified: item.value(forAttribute: NSMetadataItemFSContentChangeDateKey) as? Date,
-            lastUsed: item.value(forAttribute: NSMetadataItemLastUsedDateKey) as? Date,
-            size: (item.value(forAttribute: NSMetadataItemFSSizeKey) as? NSNumber)?.int64Value
+            modified: value(NSMetadataItemFSContentChangeDateKey, as: Date.self),
+            lastUsed: value(NSMetadataItemLastUsedDateKey, as: Date.self),
+            size: value(NSMetadataItemFSSizeKey, as: NSNumber.self)?.int64Value
         )
+    }
+
+    /// Hand results to the main thread, unless a newer search has started since they were made.
+    private func deliver(_ results: [SearchResult], for searchGeneration: Int) {
+        DispatchQueue.main.async { [self] in
+            guard generation.load(ordering: .relaxed) == searchGeneration else { return }
+            MainActor.assumeIsolated { onResults?(results) }
+        }
     }
 }

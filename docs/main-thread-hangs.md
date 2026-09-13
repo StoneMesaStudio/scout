@@ -3,6 +3,54 @@
 Working notes, not a document for John. Written 2026-09-09 while chasing a beachball he could not
 reproduce. Ranked by what actually costs him time.
 
+## 0. The one that was actually freezing it · FIXED 2026-09-12
+
+Everything below was real, and none of it was the beachball John kept hitting. The watchdog caught
+three freezes — two on 1.0.6, one on 1.0.7 — and all three were the same line, 99% of the stuck
+time in `SpotlightSearcher.publish()` → `NSMetadataItem.value(forAttribute:)` →
+`MDItemCopyAttribute` → a synchronous XPC round trip to `mds`.
+
+**Asking a result for an attribute is a trip to the Spotlight server, every time.** Measured one
+attribute at a time over 1,500 real matches:
+
+| attribute | asked per match | declared up front |
+| --- | --- | --- |
+| path | 3 µs (the item carries it) | nil — not a stored attribute |
+| display name | 329 µs | 0.07 µs |
+| content type | 257 µs | 0.06 µs |
+| modification date | 349 µs | 0.06 µs |
+| last-used date | 281 µs | 0.04 µs, identical values (101 apps compared) |
+| size | 354 µs | 0.06 µs |
+
+Five round trips per match is 1.57 ms a match, on the main thread, on every delivery. The old
+comment on `sortDescriptors = []` said "ask the system for nothing but the matches" — which is the
+trap exactly: asking for nothing up front means paying for everything one item at a time.
+
+Declared values are present *during* gathering, not only after (29/29 and 4,428/4,428 on progress
+reports), so Scout's streaming deliveries can use them.
+
+The fix, in `SpotlightSearcher`: the five attributes go in `valueListAttributes` and are read with
+`value(ofAttribute:forResultAt:)`; the path still comes from the item. And the whole query now lives
+on its own serial queue (`operationQueue`), so `start()` opening a cold iCloud folder, a slow `mds`,
+or a live update from iCloud churn can hold up file results but never the window. A generation
+counter bumped on the caller's thread drops deliveries a newer search has overtaken.
+
+Measured, same search both times:
+
+| | before | after |
+| --- | --- | --- |
+| the searcher alone, whole Mac, "png", 6,818 matches | 3,658 ms | 16 ms |
+| the real app, `--selftest png … wholeMac 14`, 493 files kept | **7,258 ms** | **144 ms** |
+
+Section 2 below was a partial fix and the reason the wheel kept turning: it made the walk happen
+less often and moved the *ranking* off the main thread, and left the walk itself — the expensive
+part — exactly where it was.
+
+`--selftest` now takes a scope and a duration and reports the longest the main thread went without
+answering. That is the number to check before shipping anything that touches the results path:
+
+    open -n -a /absolute/path/Scout.app --args --selftest png /tmp/out.txt wholeMac 14
+
 ## 1. Starting the query opens the scope folders — and one of them is iCloud's · FIXED 2026-09-09
 
 `SpotlightSearcher.search(_:directories:)` calls `query.start()` on the main thread. A sample of the
@@ -36,7 +84,7 @@ went warm and stayed warm. Verified by construction, by the suite, and by a self
 file results still arrive through the now-asynchronous start. Making it cold on demand would mean
 evicting John's Documents folder, which is not worth doing to prove a point.
 
-## 2. Re-ranking every match on every progress report · FIXED 2026-09-09 (5d77fce…)
+## 2. Re-ranking every match on every progress report · PARTIAL 2026-09-09 — see §0 (5d77fce…)
 
 A 1-second sample of the shipped 1.0.0 put **571 of 667 main-thread samples (86%)** inside
 `SpotlightSearcher.publish` → `SearchModel.rebuildSections` → `fileRows` → `Ranker.rank`.
