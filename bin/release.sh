@@ -48,19 +48,53 @@ bold "Releasing $APP_NAME $VERSION"
 # A "Developer ID Application" certificate is a different thing from the "Apple Distribution"
 # certificate used for TestFlight, and only it can be notarised. Nothing below works without one.
 step "Developer ID certificate"
-IDENTITY="$(security find-identity -v -p codesigning \
-    | sed -nE 's/.*"(Developer ID Application: .*)"/\1/p' | head -1)"
+# Apple retires the original Developer ID authority on 2027-02-01, and every certificate it issued
+# stops working that day; its replacements come from the G2 authority and expire yearly. So a Mac
+# can hold several Developer ID certificates under one name, which makes the name ambiguous to
+# codesign. Sign by SHA-1 instead, and take the certificate that expires last.
+pick_developer_id() {
+  local valid line hash="" pem="" end epoch best="" best_epoch=0
+  valid="$(security find-identity -v -p codesigning \
+      | sed -nE 's/^ *[0-9]+\) ([0-9A-F]{40}) "Developer ID Application: .*"$/\1/p')"
+  while IFS= read -r line; do
+    case "$line" in
+      "SHA-1 hash: "*) hash="${line#SHA-1 hash: }"; pem="" ;;
+      "-----BEGIN CERTIFICATE-----") pem="$line" ;;
+      "-----END CERTIFICATE-----")
+        pem="$pem"$'\n'"$line"
+        printf '%s\n' "$valid" | grep -qx "$hash" || continue
+        end="$(printf '%s\n' "$pem" | openssl x509 -noout -enddate | sed 's/^notAfter=//')"
+        epoch="$(date -j -u -f "%b %e %T %Y %Z" "$end" +%s)"
+        if [ "$epoch" -gt "$best_epoch" ]; then best="$hash"; best_epoch="$epoch"; fi ;;
+      *) [ -n "$pem" ] && pem="$pem"$'\n'"$line" ;;
+    esac
+  done < <(security find-certificate -a -Z -p -c "Developer ID Application")
+  [ -n "$best" ] && printf '%s %s\n' "$best" "$best_epoch"
+  return 0
+}
+PICKED="$(pick_developer_id)"
+IDENTITY="${PICKED%% *}"
+IDENTITY_NAME="$(security find-identity -v -p codesigning \
+    | sed -nE "s/.*$IDENTITY \"(.*)\"\$/\1/p" | head -1)"
 if [ -z "$IDENTITY" ]; then
   die "No Developer ID Application certificate on this Mac.
 
   Xcode ▸ Settings ▸ Accounts ▸ Stone Mesa Studio, LLC ▸ Manage Certificates…
-  then the + at the bottom left ▸ Developer ID Application.
+  then the + at the bottom left ▸ Developer ID Application. If asked for an
+  intermediary, choose the G2 Sub-CA.
 
   It takes about thirty seconds and only the account holder can do it. The
   \"Apple Distribution\" certificate already installed is for TestFlight and the
   App Store; the notary service will not accept it."
 fi
-ok "$IDENTITY"
+ok "$IDENTITY_NAME"
+EXPIRES="${PICKED##* }"
+DAYS_LEFT=$(( (EXPIRES - $(date +%s)) / 86400 ))
+if [ "$DAYS_LEFT" -lt 60 ]; then
+  printf '  \033[33m!\033[0m This certificate expires in %s days (%s). Create a new Developer ID\n' \
+    "$DAYS_LEFT" "$(date -r "$EXPIRES" +%Y-%m-%d)"
+  printf '    Application certificate, choosing the G2 Sub-CA when asked.\n'
+fi
 
 # ---- 2. Notary credentials ------------------------------------------------
 # The issuer is team-wide, so the key any of the studio's apps uses works here too.
