@@ -238,6 +238,14 @@ struct SearchRootView: View {
         case .row(let row, let index):
             PanelRowView(row: row, selected: model.selection == index)
                 .contentShape(Rectangle())
+                // ⌘-click opens the enclosing folder instead of the file, which is what ⌘Return
+                // does from the keyboard and what the Finder and Spotlight both do.
+                .highPriorityGesture(
+                    TapGesture().modifiers(.command).onEnded {
+                        model.selection = index
+                        model.revealInFinder()
+                    }
+                )
                 .onTapGesture {
                     model.selection = index
                     model.activate()
