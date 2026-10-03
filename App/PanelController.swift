@@ -111,6 +111,7 @@ final class PanelController {
             case .note: "note"
             case .reminder: "rem"
             case .contact: "contact"
+            case .calculation: "sum"
             }
         case .showMore(_, let remaining): "(+\(remaining) more)"
         case .indexing(_, let done, let total): "(indexing \(done)/\(total))"

@@ -138,7 +138,7 @@ struct PanelRowView: View {
     /// the middle like a filename.
     private var isProse: Bool {
         switch row {
-        case .message, .mail, .note, .reminder: true
+        case .message, .mail, .note, .reminder, .calculation: true
         default: false
         }
     }
@@ -228,6 +228,8 @@ struct PanelRowView: View {
             symbolIcon(hit.isLocked ? "lock.fill" : "note.text")
         case .reminder(let hit):
             symbolIcon(hit.isCompleted ? "checkmark.circle.fill" : "circle")
+        case .calculation:
+            symbolIcon("equal.square")
         }
     }
 
@@ -250,6 +252,7 @@ struct PanelRowView: View {
         case .contact(let hit): hit.name
         case .note(let hit): hit.title
         case .reminder(let hit): hit.title
+        case .calculation(let sum): sum.answer
         }
     }
 
@@ -309,6 +312,9 @@ struct PanelRowView: View {
 
         case .reminder(let hit):
             return hit.detail.isEmpty ? "Reminder" : hit.detail
+
+        case .calculation(let sum):
+            return sum.question
         }
     }
 
@@ -322,6 +328,7 @@ struct PanelRowView: View {
         case .contact: "return to open in Contacts"
         case .note: "return to open in Notes"
         case .reminder: "return to open in Reminders"
+        case .calculation: "return to copy"
         }
     }
 }

@@ -19,6 +19,8 @@ enum PanelRow: Identifiable {
     case contact(ContactHit)
     case note(NoteHit)
     case reminder(ReminderHit)
+    /// An answer, when what was typed turned out to be a sum rather than a search.
+    case calculation(Calculation)
 
     var id: String {
         switch self {
@@ -30,6 +32,7 @@ enum PanelRow: Identifiable {
         case .contact(let hit): "contact:\(hit.identifier)"
         case .note(let hit): "note:\(hit.rowID)"
         case .reminder(let hit): "reminder:\(hit.identifier)"
+        case .calculation(let sum): "calculation:\(sum.question)"
         }
     }
 }
@@ -124,6 +127,9 @@ final class SearchModel {
     private(set) var mailIndexing: MailBodyIndex.Progress?
     /// How many file matches the exclusions removed, so nothing disappears without a trace.
     private(set) var hiddenCount: Int = 0
+    /// The answer, when what was typed turned out to be a sum. Worked out from the text alone, so
+    /// it appears whether or not any source is switched on.
+    private(set) var calculation: Calculation?
 
     var showHidden: Bool = false {
         didSet { rankFiles() }
@@ -220,7 +226,11 @@ final class SearchModel {
     }
 
     /// Every row across every section, in the order they are drawn — what the arrow keys walk.
-    var rows: [PanelRow] { sections.flatMap(\.rows) }
+    /// An answer sits above every section, so Return copies it the moment it appears.
+    var rows: [PanelRow] {
+        guard let calculation else { return sections.flatMap(\.rows) }
+        return [.calculation(calculation)] + sections.flatMap(\.rows)
+    }
     var rowCount: Int { rows.count }
 
     var pinnedPlaces: [URL] { settings.pinnedPlaces }
@@ -415,6 +425,9 @@ final class SearchModel {
         sections = []
         displayItems = []
         hiddenCount = 0
+        // So an answer shows the instant it is typed, even with every source switched off and
+        // nothing on the way back from disk.
+        rebuildSections()
     }
 
     func stop() {
@@ -760,6 +773,10 @@ final class SearchModel {
     // MARK: - Assembling the panel
 
     private func rebuildSections() {
+        // Worked out from the typed text alone, so a photograph can show one too: a sum gives
+        // nothing away about whoever's Mac took the picture.
+        calculation = Calculator.evaluate(text)
+
         var built: [PanelSection] = []
 
         for lane in orderedLanes where enabledLanes.contains(lane) {
@@ -810,6 +827,11 @@ final class SearchModel {
     private func rebuildDisplayItems() {
         var items: [PanelItem] = []
         var index = 0
+
+        if let calculation {
+            items.append(.row(.calculation(calculation), index: index))
+            index += 1
+        }
 
         for section in sections {
             items.append(.header(lane: section.lane, count: section.rows.count, total: section.total))
@@ -970,7 +992,7 @@ final class SearchModel {
 
     /// The row index at which a section starts, for drawing the selection.
     func startIndex(of section: PanelSection) -> Int {
-        var index = 0
+        var index = calculation == nil ? 0 : 1
         for candidate in sections {
             if candidate.id == section.id { return index }
             index += candidate.rows.count
@@ -1023,6 +1045,10 @@ final class SearchModel {
             // Without a conversation to open, fall back to launching Messages itself rather
             // than doing nothing.
             open(hit.openURL, orLaunch: "com.apple.MobileSMS")
+        case .calculation(let sum):
+            // Copied without its thousands separators, so it pastes into the next sum.
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(sum.plain, forType: .string)
         case nil:
             return
         }
@@ -1047,7 +1073,7 @@ final class SearchModel {
         let url: URL? = switch selectedRow {
         case .app(let entry, _): entry.url
         case .file(let result): result.url
-        case .pane, .mail, .message, .contact, .note, .reminder, nil: nil
+        case .pane, .mail, .message, .contact, .note, .reminder, .calculation, nil: nil
         }
         guard let url else { return }
         if let result = selectedFile { pickMemory.record(query: text, url: result.url) }
