@@ -230,7 +230,21 @@ run ln -s /Applications "$STAGE/Applications"
 run hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
 run rm -rf "$STAGE"
 run codesign --sign "$IDENTITY" --timestamp "$DMG"
-ok "$(basename "$DMG")"
+
+# `hdiutil create` can leave the finished image attached, and an attached image cannot be read by
+# anything else. `hdiutil verify` answers "Resource temporarily unavailable" and `notarytool` hangs
+# in its pre-submission checks with no output at all, for as long as it is left running. That cost
+# two twenty-minute stalls on 2026-10-02 before anybody looked at the image rather than the network.
+ATTACHED="$(hdiutil info 2>/dev/null | grep -A 20 -F "$DMG" | grep -m1 -oE '^/dev/disk[0-9]+' || true)"
+if [ -n "$ATTACHED" ]; then
+  run hdiutil detach "$ATTACHED" -force
+fi
+if [ "$DRY" = 0 ]; then
+  hdiutil verify "$DMG" >/dev/null 2>&1 \
+    || die "The disk image cannot be read, so notarisation would hang rather than fail.
+  Something still has it attached. Check 'hdiutil info'."
+fi
+ok "$(basename "$DMG"), readable and detached"
 
 # ---- 8. Notarise the disk image too ---------------------------------------
 # Otherwise the first thing a new user sees is Gatekeeper refusing the download itself.
