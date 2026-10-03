@@ -141,6 +141,15 @@ if [ "${#BACKENDS[@]}" -gt 0 ]; then
   done
 fi
 
+# ---- leave nothing of ours running ----------------------------------------
+# A test run can leave a copy of the app from build/ running. In a menu bar it is indistinguishable
+# from the installed one, it has none of the permissions the installed one was granted, and it
+# answers "you are up to date" against whatever version was just built. One of these sat in John's
+# menu bar for a day and reported 1.0.9 as already installed while /Applications held 1.0.8.
+if [ "$DRYRUN" = 0 ] && pkill -f "^$PWD/build/.*/MacOS/" 2>/dev/null; then
+  echo "  stopped a copy of the app that the build left running"
+fi
+
 echo
 if [ "$DRYRUN" = 1 ]; then bold "Dry run complete — the commands above are what preflight would run."
 else bold "✅ PREFLIGHT PASSED — ${APP_NAME:-app} builds and tests clean."; fi
