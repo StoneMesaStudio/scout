@@ -17,7 +17,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
-OUT="${1:-$HOME/Sites/stonemesa/apps/assets/screens/scout}"
+OUT="${1:-$HOME/Development/Websites/stonemesastudio.com/apps/assets/screens/scout}"
 APP="$ROOT/build/release/Scout.app"
 WIDTH=900
 HEIGHT=1020
