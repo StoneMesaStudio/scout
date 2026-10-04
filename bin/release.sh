@@ -79,13 +79,13 @@ IDENTITY_NAME="$(security find-identity -v -p codesigning \
 if [ -z "$IDENTITY" ]; then
   die "No Developer ID Application certificate on this Mac.
 
-  Xcode ▸ Settings ▸ Accounts ▸ Stone Mesa Studio, LLC ▸ Manage Certificates…
-  then the + at the bottom left ▸ Developer ID Application. If asked for an
-  intermediary, choose the G2 Sub-CA.
+  developer.apple.com ▸ Certificates ▸ + ▸ Developer ID Application ▸
+  G2 Sub-CA (Xcode 11.4.1 or later), then upload a certificate signing request.
 
-  It takes about thirty seconds and only the account holder can do it. The
-  \"Apple Distribution\" certificate already installed is for TestFlight and the
-  App Store; the notary service will not accept it."
+  Only the account holder can do it. Not in Xcode: on 2026-10-03 its Manage
+  Certificates ▸ + issued a certificate from the authority that expires on
+  2027-02-01. The \"Apple Distribution\" certificate already installed is for
+  TestFlight and the App Store; the notary service will not accept it."
 fi
 ok "$IDENTITY_NAME"
 EXPIRES="${PICKED##* }"
@@ -93,7 +93,7 @@ DAYS_LEFT=$(( (EXPIRES - $(date +%s)) / 86400 ))
 if [ "$DAYS_LEFT" -lt 60 ]; then
   printf '  \033[33m!\033[0m This certificate expires in %s days (%s). Create a new Developer ID\n' \
     "$DAYS_LEFT" "$(date -r "$EXPIRES" +%Y-%m-%d)"
-  printf '    Application certificate, choosing the G2 Sub-CA when asked.\n'
+  printf '    Application certificate at developer.apple.com, choosing G2 Sub-CA.\n'
 fi
 
 # ---- 2. Notary credentials ------------------------------------------------
