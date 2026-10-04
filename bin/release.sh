@@ -49,7 +49,7 @@ bold "Releasing $APP_NAME $VERSION"
 # certificate used for TestFlight, and only it can be notarised. Nothing below works without one.
 step "Developer ID certificate"
 # Apple retires the original Developer ID authority on 2027-02-01, and every certificate it issued
-# stops working that day; its replacements come from the G2 authority and expire yearly. So a Mac
+# stops working that day; its replacements come from the G2 authority. So a Mac
 # can hold several Developer ID certificates under one name, which makes the name ambiguous to
 # codesign. Sign by SHA-1 instead, and take the certificate that expires last.
 pick_developer_id() {
